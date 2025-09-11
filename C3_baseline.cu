@@ -11,7 +11,14 @@ __global__ void fused_3200x16x32_3200x16x16_SiLU(const T * input, const T * \
                 Conv1_weight, const T * Conv1_bias, const T * Convm0_weight,\
                 const T * Convm0_bias, T * D1, T * D2, unsigned int offset)
 {
-	//TODO
+	//
+	// Probably won't need extra global memory
+	// Shared A_tile is of size 32 * 32
+
+	__shared__ T A_tile[32][32];
+
+	
+
 	return;
 }
 
@@ -19,6 +26,17 @@ template<typename T>
 __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
                 bias, T * D, unsigned int offset)
 {
+	// Trivial convolution
+	// 
+	// each offset compute 20 * 160 in output
+	// 
+	// Input size: 3600 * ? TODO: deside how to devide
+	// 
+	//
+	// 3x3 kernel size, (1, 1) padding 
+	//
+
+
 	TODO();
 }
 
@@ -103,7 +121,8 @@ __global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
 	// Two accesses to global mem : Global -> Shared
 	// 
 
-	__shared__ T tiled_input[16][33];
+	// TODO: why padding make it worse? the same for weight
+	__shared__ T tiled_input[16][32];
 	// __shared__ T tiled_input_transposed[32][17]
 	
 	// An offset of thread_linear or (* + 256) on tiled input
@@ -125,7 +144,7 @@ __global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
 	*/
 	
 	
-	__shared__ T tiled_weight[32][17];
+	__shared__ T tiled_weight[32][16];
 	// Coalescing access
 	tiled_weight[threadIdx.y][threadIdx.x] = weight[thread_linear];
 	tiled_weight[threadIdx.y + 16U][threadIdx.x] = weight[thread_linear + 256U];
@@ -197,8 +216,9 @@ __global__ void Conv_3200x32x32_SiLU(const T * input, const T * weight, \
 	// and 32 * 32 elements from B, each thread move 4 elements from
 	// each
 	
-	__shared__ T A_tile[32][33];
-	__shared__ T B_tile[32][33];
+	// TODO: padding?	
+	__shared__ T A_tile[32][32];
+	__shared__ T B_tile[32][32];
 
 	A_tile[warp_id][lane_id] = input[start_pos + (blockIdx.y << 10)
 						    + thread_linear];
