@@ -14,10 +14,95 @@ __global__ void fused_3200x16x32_3200x16x16_SiLU(const T * input, const T * \
 	//
 	// Probably won't need extra global memory
 	// Shared A_tile is of size 32 * 32
-
-	__shared__ T A_tile[32][32];
-
 	
+	__shared__ T A_tile[32][32];
+	__shared__ T B_tile[32][16];
+
+	// For temporary 
+	// __shared__ T D_tile[32][16];
+
+	unsigned int start_pos = (offset * 3200U) << 5;
+	unsigned int tile_start_pos = start_pos + (blockIdx.y << 10);
+
+	// Typical block size dim3(16, 16)
+	// Each thread move 4 elements from input,
+	// 2 elements from Conv1_weight and 1 element from Conv2_weigt
+	// Each thread computes 2 elements in D1 and D2
+
+	unsigned int block_linear = gridDim.x * blockIdx.y + blockIdx.x;
+        unsigned int thread_linear = blockDim.x * threadIdx.y + threadIdx.x;	
+
+	unsigned int warp_id = thread_linear >> 5;
+	unsigned int lane_id = thread_linear & 31U;
+
+	A_tile[warp_id][lane_id] = input[tile_start_pos + thread_linear];
+	A_tile[warp_id + 8][lane_id] = input[tile_start_pos + thread_linear + 256];
+	A_tile[warp_id + 16][lane_id] = input[tile_start_pos + thread_linear + 512];
+	A_tile[warp_id + 24][lane_id] = input[tile_start_pos + thread_linear + 768];
+
+	B_tile[threadIdx.y][threadIdx.x] = Conv1_weight[(threadIdx.y << 4) + threadIdx.x];
+	B_tile[threadIdx.y + 16][threadIdx.x] = Conv1_weight[(threadIdx.y << 4) + threadIdx.x + 256];
+       
+	T sum0{0};
+	T sum1{0};
+
+	T B_val[32];
+
+	__syncthreads();
+
+#pragma unroll
+	for(int i = 0; i < 32; i++){
+		B_val[i] = B_tile[i][threadIdx.x];
+	}
+
+#pragma unroll
+	for(int i = 0; i < 32; i++){
+		sum0 += A_tile[threadIdx.y][i] * B_val[i];
+		sum1 += A_tile[threadIdx.y + 16][i] * B_val[i];
+	}	
+
+	sum0 += Conv1_bias[threadIdx.x];
+	sum1 += Conv1_bias[threadIdx.x];
+	
+	sum0 = silu<T>(sum0);
+	sum1 = silu<T>(sum1);
+
+	// to global
+	D1[start_pos + (threadIdx.y << 4) + threadIdx.x] = sum0;
+	D1[start_pos + (threadIdx.y << 4) + threadIdx.x + 256] = sum1;
+	
+	// to shared
+	A_tile[threadIdx.y][threadIdx.x] = sum0;
+	A_tile[threadIdx.y + 16][threadIdx.x] = sum1;
+
+	B_tile[threadIdx.y][threadIdx.x] = Convm0_weight[(threadIdx.y << 4)
+						        + threadIdx.x];
+	
+
+	sum0 = static_cast<T>(0);
+	sum1 = static_cast<T>(0);
+	
+	__syncthreads();
+
+#pragma unroll
+	for(int i = 0; i < 16; i++){
+		B_val[i] = B_tile[i][threadIdx.x];
+	}
+
+#pragma unroll	
+	for(int i = 0; i < 16; i++){
+		sum0 += A_tile[threadIdx.y][i] * B_val[i];
+		sum1 += A_tile[threadIdx.y + 16][i] * B_val[i];
+	}
+	
+	sum0 += Convm0_bias[threadIdx.x];
+	sum1 += Convm0_bias[threadIdx.x];
+
+	sum0 = silu<T>(sum0);
+	sum1 = silu<T>(sum1);
+
+	D2[start_pos + (threadIdx.y << 4) + threadIdx.x] = sum0;
+        D2[start_pos + (threadIdx.y << 4) + threadIdx.x + 256] = sum1;
 
 	return;
 }
@@ -27,17 +112,16 @@ __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
                 bias, T * D, unsigned int offset)
 {
 	// Trivial convolution
+	// consider (9 * 25600) * 32 input
 	// 
-	// each offset compute 20 * 160 in output
+	// each offset compute (9 *3200) * 32 in output
 	// 
-	// Input size: 3600 * ? TODO: deside how to devide
-	// 
-	//
 	// 3x3 kernel size, (1, 1) padding 
 	//
 
+		
 
-	TODO();
+
 }
 
 
