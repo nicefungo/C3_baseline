@@ -96,5 +96,15 @@ __global__ void Conv_3200x32x32_SiLU(const T * input, const T * weight, \
 		const T * bias, T * D, unsigned int offset);
 
 template<typename T>
-void C3(const T * input, const T * weights, const T * biases, T * D, T * Temp);
+void C3(const T * img, const T * weights, const T * biases, T * D, T * Temp);
+
+template<typename T>
+__global__ void im2row_160x160x32_25600x32(const T * img, T * D);
+
+template<typename T>
+__global__ void row2im_25600x32_160x160x32(const T * D , T * img);
+
+template<typename T>
+__global__ void weight_resize_3x3x16x16_288x16(const T * weight , T * D);
+
 
