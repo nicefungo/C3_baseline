@@ -2,7 +2,13 @@ import onnxruntime as ort
 import torch
 import numpy as np
 import sys
+import os
 
+path1 = "./inputs"
+path2 = "./outputs"
+
+os.makedirs(path1, exist_ok=True)
+os.makedirs(path2, exist_ok=True)
 
 session = ort.InferenceSession("C3.onnx")
 n = 10
