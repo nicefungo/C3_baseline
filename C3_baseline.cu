@@ -6,6 +6,58 @@ void TODO(){
 	std::exit(EXIT_FAILURE);
 }
 
+
+template<typename T>
+__global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D){
+	
+
+	// TILE_DIM = 32
+	__shared__ T tile[32][33]; // tile size is 1 * 800
+
+	// unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
+	// unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
+
+	unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+	unsigned int col = threadIdx.y; // 0:32
+
+	// Let a single block transposes one tile (1024 elements)
+	// Requires (800, 1) blocks
+	if(col >= 32 || row >= 25600) return;
+
+	// One thread moves 1024/BLOCK_DIM^2 elements
+	// Assume a typical (32, 32) blocksize, then it is 1
+	
+	tile[threadIdx.y][threadIdx.x] = img[col * 25600 + row];
+	
+	__syncthreads();
+
+	D[(((blockIdx.x << 5) + threadIdx.y) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+
+
+}
+
+template<typename T>
+__global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img){
+	
+	__shared__ T tile[32][33];
+
+	// unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
+        // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
+
+        unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int col = threadIdx.y; // 0:32
+
+	if(col >= 32 || row >= 25600) return;
+	
+	tile[threadIdx.y][threadIdx.x] = D[(((blockIdx.x << 5) + threadIdx.y) << 5) +threadIdx.x];
+
+	__syncthreads();
+        
+	img[(col * 25600) + row] = tile[threadIdx.x][threadIdx.y];
+
+}
+
+
 template<typename T>
 __global__ void fused_3200x16x32_3200x16x16_SiLU(const T * input, const T * \
                 Conv1_weight, const T * Conv1_bias, const T * Convm0_weight,\
@@ -485,16 +537,72 @@ int main(int arg, char ** args){
 	}
 	std::cout << std::endl; */
 
+	// loading input
+	
 
-	float * d_input, * d_weights, * d_biases, * d_output, * d_buffer;
+	load_input_into<float>("data/inputs/input_0.txt", input, INPUT_SIZE);
+	/* for(int i = 0; i < 16; i++){
+		for(int j = 0; j < 16; j++){
+			std::cout << input[i * 25600 + j] << " ";
+		}
+		std::cout << std::endl;
+	} */
+	
+
+	float * d_input, * d_weights, * d_biases, * d_output, * d_buffer, * d_temp_input_1, * d_temp_input_2;
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_input, INPUT_SIZE * sizeof(float)));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_temp_input_1, INPUT_SIZE * sizeof(float)));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_temp_input_2, INPUT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_weights, CONV_WEIGHT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_biases, CONV_BIAS_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_output, OUTPUT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_buffer, OUTPUT_SIZE * sizeof(float)));
 
 
+	CHECK_CUDA_ERROR(cudaMemcpy(d_input, input, 100U * sizeof(float) << 13, cudaMemcpyHostToDevice));
+
+	dim3 blocksize(32, 32);
+        dim3 gridsize(800, 1);
+        im2col_32x160x160_25600x32_transpose<float><<<gridsize, blocksize>>>(d_input, d_temp_input_1);
 	
+	CHECK_LAST_CUDA_ERROR();
+	
+        col2im_25600x32_32x160x160_transpose<float><<<gridsize, blocksize>>>(d_temp_input_1, d_temp_input_2);
+
+	CHECK_LAST_CUDA_ERROR();
+
+	float * temp_input_1 = (float*)malloc(100U * sizeof(float) << 13);
+	float * temp_input_2 = (float*)malloc(100U * sizeof(float) << 13);
+
+
+	CHECK_CUDA_ERROR(cudaMemcpy(temp_input_1, d_temp_input_1, 100U * sizeof(float) << 13, cudaMemcpyDeviceToHost));
+	CHECK_CUDA_ERROR(cudaMemcpy(temp_input_2, d_temp_input_2, 100U * sizeof(float) << 13, cudaMemcpyDeviceToHost));
+	
+
+	/* int transpose_miss_1 = 0;
+	int transpose_miss_2 = 0;
+	for(int i = 0; i < 32; i++){
+		for(int j = 0; j < 25600; j++){
+			if(abs(temp_input_1[j * 32 + i] - input[i * 25600 + j]) > 0.0001f){
+				transpose_miss_1++;
+			}
+		}
+	}
+
+	for(int i = 0; i < 25600 * 32; i++){
+		if(abs(temp_input_2[i] - input[i]) > 0.0001f){
+			transpose_miss_2++;
+		}
+	}
+	std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
+	std::cout << transpose_miss_1 << std::endl;
+	std::cout << transpose_miss_2 << std::endl;*/
+
+	CHECK_CUDA_ERROR(cudaFree(d_temp_input_1));
+	CHECK_CUDA_ERROR(cudaFree(d_temp_input_2));
+	free(temp_input_1);
+	free(temp_input_2);
+
 
 		// Unit tests
 		std::cout << "-----------------------------------------------" 

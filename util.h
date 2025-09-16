@@ -5,6 +5,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <fstream>
 
 template <typename T>
 __host__ __device__ T gelu(const T x);
@@ -61,3 +62,14 @@ void load_npy_into(const std::string& path, T* dst, size_t expected_count) {
     std::memcpy(dst, arr.data<T>(), count * sizeof(T));
 }
 
+template <class T>
+void load_input_into(const std::string& path, T * dst, size_t expected_count){
+	std::ifstream in(path);
+	if(!in){
+		std::cerr << "Input file " << path << " doesn't exist!" << std::endl;
+		std::exit(EXIT_FAILURE);
+	}
+	size_t i = 0;
+	for(; i < expected_count && in >> dst[i]; ++i){}
+
+}
