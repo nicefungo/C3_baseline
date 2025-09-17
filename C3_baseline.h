@@ -83,6 +83,10 @@ template<typename T>
 __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
 		bias, T * D, unsigned int offset);
 
+template<typename T>
+__global__ void Convm1_3200x288x16_SiLU(const T * input, const T * weight, \
+		const T * bias, T * D, unsigned int offset);
+
 // template<typename T>
 // __global__ void fused_3200x16x16_3200x16x16_SiLU();
 
@@ -105,6 +109,7 @@ template<typename T>
 __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img);
 
 template<typename T>
-__global__ void weight_resize_3x3x16x16_288x16(const T * weight , T * D);
+__global__ void Convm1_weight_resize_3x3x16x16_288x16(const T * weight , T * D);
 
-
+template<typename T>
+__global__ void Convm1_input_resize_25600x16_25600x288(const T * weight , T * D);

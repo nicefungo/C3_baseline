@@ -170,12 +170,112 @@ __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
 	// 
 	// 3x3 kernel size, (1, 1) padding 
 	//
-
-		
-
+	TODO();
 
 }
 
+
+template<typename T>
+__global__ void Convm1_3200x288x16_SiLU(const T * input, const T * weight, \
+                const T * bias, T * D, unsigned int offset)
+{
+	TODO();
+
+}
+
+template<typename T>
+__global__ void Convm1_weight_resize_3x3x16x16_288x16(const T * weight , T * D)
+{
+	TODO();	
+}
+
+
+// mem intensive
+template<typename T>
+__global__ void Convm1_input_resize_25600x16_25600x288(const T * input , T * D)
+{
+	// Each output tile is 160x(16x9)
+	// Necessary gridsize is (160, 1)
+	// 
+
+	// int col = blockIdx.x * blockDim.x + threadIdx.x;
+	// int row = blockIdx.y * blockDim.y + threadIdx.y;
+
+	// Assume (32, 8) block size
+	// TODO: try (32, 16)
+	// Receiptive region size is (160x3)x16
+
+	unsigned int tile_row = blockIdx.x * 160U;
+	// unsigned int tile_col = 0;
+
+	unsigned int input_tile_start_pos = (tile_row << 4);
+	unsigned int output_tile_start_pos = tile_row * 288;
+	
+	unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x;
+	// unsigned int input_offset = 0;
+	// unsigned int output_offset = 0;
+
+	// Each thread moves 30 elements from global
+	// TODO: make it wider, without dividing by warps? But it's float32
+	__shared__ T tile[480][16+1];
+
+#pragma unroll 10
+	for(int i = 0; i < 30; i++){
+		// global offsets
+		unsigned int linear = input_tile_start_pos + thread_linear + (i << 8);
+        	unsigned int channel_linear = linear >> 4;
+        	unsigned int channel_n = linear & 15U;
+		// row/col in img
+		int row = channel_linear / 160;
+		int col = channel_linear - (row * 160);
+		// int row_padding = row - 1;
+		// int col_padding = col - 1;
+
+		// tile offsets
+		// TODO: fewer the variables
+		unsigned int tile_linear = thread_linear + (i << 8);
+		unsigned int row_tile = (tile_linear >> 4) / 160;
+		unsigned int col_tile = (tile_linear >> 4) % 160;
+
+		tile[row_tile * 160 + col_tile][channel_n] = ((row >= 1) && (col >= 1) && (row < 161) && (col < 161))
+					          ?input[+ (((row-1) * 160 + (col-1)) << 4) \
+						         + channel_n]
+				       	          :static_cast<T>(0);
+
+		// tile[threadIdx.y * 60 + (threadIdx.x >> 4)][threadIdx.x & 15U] = 1?weight[weight_tile_start_pos + (i << 5) + ((threadIdx.y * 60) << 4) + threadIdx.x]:static_cast<T>(0);
+	}
+
+	__syncthreads();
+	
+	// Each thread moves 90 elements to global
+	// TODO: Better to fuse
+
+	// not economic
+	// T val[3][12];
+	// for(int i = -1, )
+
+	int offset0[9] = {-1, 0, 1, -1, 0, 1, -1, 0, 1};
+	int offset1[9] = {-1, -1, -1, 0, 0, 0, 1, 1, 1};
+
+
+#pragma unroll 10
+	for(int i = 0; i < 90; i++){
+		// global offsets
+		unsigned int linear = output_tile_start_pos + thread_linear + (i << 8);
+		// row/col in output
+		unsigned int row = linear / 144;
+		unsigned int col = linear - row * 144;
+		
+		// tile offsets
+		unsigned int linear_output_tile = thread_linear + (i << 8);
+		unsigned int row_tile = linear_output_tile / 144;
+		unsigned int col_tile = linear_output_tile - row_tile * 144;
+		unsigned int channel_linear = (col_tile >> 4);   // 0:9
+		unsigned int channel_n = col_tile & 15U;         // 0:16
+		D[row * 144 + col] = tile[(row_tile + offset1[channel_linear]) * 160 + offset0[channel_linear] + 1][channel_n];
+	}
+	
+}
 
 
 template<typename T>
