@@ -59,9 +59,9 @@ __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img){
 
 
 template<typename T>
-__global__ void fused_3200x16x32_3200x16x16_SiLU(const T * input, const T * \
+__global__ void fused_25600x16x32_25600x16x16_SiLU(const T * input, const T * \
                 Conv1_weight, const T * Conv1_bias, const T * Convm0_weight,\
-                const T * Convm0_bias, T * D1, T * D2, unsigned int offset)
+                const T * Convm0_bias, T * D1, T * D2)
 {
 	//
 	// Probably won't need extra global memory
@@ -73,8 +73,8 @@ __global__ void fused_3200x16x32_3200x16x16_SiLU(const T * input, const T * \
 	// For temporary 
 	// __shared__ T D_tile[32][16];
 
-	unsigned int start_pos = (offset * 3200U) << 5;
-	unsigned int tile_start_pos = start_pos + (blockIdx.y << 10);
+	// unsigned int start_pos = (offset * 3200U) << 5;
+	unsigned int tile_start_pos = (blockIdx.y << 10);
 
 	// Typical block size dim3(16, 16)
 	// Each thread move 4 elements from input,
@@ -159,6 +159,34 @@ __global__ void fused_3200x16x32_3200x16x16_SiLU(const T * input, const T * \
 	return;
 }
 
+
+void CPU_Convm1_25600x16_16x16x3x3(const float* X, const float* Wt, const float* bias, float* Y) {
+    for (int h = 0; h < 160; ++h) {
+        for (int w = 0; w < 160; ++w) {
+            const int r = h * 160 + w;
+            for (int m = 0; m < 16; ++m) {
+                float acc = bias ? bias[m] : 0.0f;
+                for (int c = 0; c < 16; ++c) {
+                    for (int kh = -1; kh <= 1; ++kh) {
+                        const int ih = h + kh;
+                        if (ih < 0 || ih >= 160) continue;
+                        for (int kw = -1; kw <= 1; ++kw) {
+                            const int iw = w + kw;
+                            if (iw < 0 || iw >= 160) continue;
+                            const int slot = (kh + 1) * 3 + (kw + 1);      // 0..8
+                            const float x = X[((ih * 160 + iw) * 16) + c];
+                            const float wv = Wt[(((m * 16 + c) * 3 + (kh + 1)) * 3) + (kw + 1)];
+                            acc += x * wv;
+                        }
+                    }
+                }
+		
+                Y[r * 16 + m] = silu<float>(acc);
+            }
+        }
+    }
+}
+
 template<typename T>
 __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
                 bias, T * D, unsigned int offset)
@@ -176,23 +204,90 @@ __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
 
 
 template<typename T>
-__global__ void Convm1_3200x288x16_SiLU(const T * input, const T * weight, \
-                const T * bias, T * D, unsigned int offset)
+__global__ void Convm1_25600x144x16_SiLU(const T * input, const T * weight, \
+                const T * bias, T * D)
 {
-	TODO();
+	// tile (32, 16)
+	// grid(800, 1) block(16, 16) split_k 9
+	
+	__shared__ T tile_A[32][17];
+	__shared__ T tile_B[16][17];
+
+	
+	unsigned int thread_linear = blockDim.x * threadIdx.y + threadIdx.x;
+
+	T sum0{0};
+	T sum1{0};
+
+#pragma unroll
+	for(int i = 0; i < 9; i++){
+		// i k_axis_offset
+
+		tile_A[threadIdx.y][threadIdx.x] = input[((blockIdx.x << 5) + threadIdx.y) * 144 + (i << 4) + threadIdx.x];
+		tile_A[threadIdx.y + 16][threadIdx.x] = input[((blockIdx.x << 5) + threadIdx.y + 16U) * 144 + (i << 4) + threadIdx.x];
+
+		tile_B[threadIdx.y][threadIdx.x] = weight[(i << 8) + thread_linear];
+
+		__syncthreads();
+
+		T B_val[16];
+
+#pragma unroll
+		for(int j = 0; j < 16; j++){
+			B_val[j] = tile_B[j][threadIdx.x];	
+		}
+
+#pragma unroll
+		for(int j = 0; j < 16; j++){
+		
+			sum0 += tile_A[threadIdx.y][j] * B_val[j];	
+			sum1 += tile_A[threadIdx.y + 16][j] * B_val[j];	
+		}
+
+		__syncthreads();
+
+	}
+
+	T the_bias = bias[threadIdx.x];
+	sum0 += the_bias;
+	sum1 += the_bias;
+
+	sum0 = silu<T>(sum0);
+	sum1 = silu<T>(sum1);
+
+	D[(((blockIdx.x << 5) + threadIdx.y) << 4) + threadIdx.x] = sum0;
+	D[(((blockIdx.x << 5) + threadIdx.y + 16U) << 4) + threadIdx.x] = sum1;
 
 }
 
 template<typename T>
-__global__ void Convm1_weight_resize_3x3x16x16_288x16(const T * weight , T * D)
+__global__ void Convm1_weight_reshape_16x16x3x3_144x16(const T * weight , T * D)
 {
-	TODO();	
+
+	
+	// (9, 1) grid, (16, 16) block
+
+	__shared__ T tile[16][17];
+
+	
+	// unsigned int thread_linear = blockDim.x * threadIdx.y + threadIdx.x;
+	unsigned int row = threadIdx.y;
+	unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
+	
+
+	tile[threadIdx.y][threadIdx.x] = weight[row * 144 + col];
+	
+	__syncthreads();
+
+	D[(blockIdx.x * 16 + threadIdx.y) * 16 + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+
+	return;	
 }
 
 
 // mem intensive
 template<typename T>
-__global__ void Convm1_input_resize_25600x16_25600x288(const T * input , T * D)
+__global__ void Convm1_input_reshape_25600x16_25600x144(const T * input , T * D)
 {
 	// Each output tile is 160x(16x9)
 	// Necessary gridsize is (160, 1)
@@ -205,18 +300,20 @@ __global__ void Convm1_input_resize_25600x16_25600x288(const T * input , T * D)
 	// TODO: try (32, 16)
 	// Receiptive region size is (160x3)x16
 
-	unsigned int tile_row = blockIdx.x * 160U;
+	// tile start row number
+	unsigned int tile_row = blockIdx.x * 160U; // 0:25600:160
 	// unsigned int tile_col = 0;
 
+	// mid-of-kernel element pos
 	unsigned int input_tile_start_pos = (tile_row << 4);
-	unsigned int output_tile_start_pos = tile_row * 288;
+	unsigned int output_tile_start_pos = tile_row * 144;
 	
-	unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x;
+	unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x;  // 256 for (32, 8)
 	// unsigned int input_offset = 0;
 	// unsigned int output_offset = 0;
 
 	// Each thread moves 30 elements from global
-	// TODO: make it wider, without dividing by warps? But it's float32
+	// Three rows in original input with row padding
 	__shared__ T tile[480][16+1];
 
 #pragma unroll 10
@@ -226,20 +323,19 @@ __global__ void Convm1_input_resize_25600x16_25600x288(const T * input , T * D)
         	unsigned int channel_linear = linear >> 4;
         	unsigned int channel_n = linear & 15U;
 		// row/col in img
-		int row = channel_linear / 160;
-		int col = channel_linear - (row * 160);
+		int row = channel_linear / 160;          // 0:161
+		int col = channel_linear - (row * 160);  // 0:160
 		// int row_padding = row - 1;
 		// int col_padding = col - 1;
 
 		// tile offsets
 		// TODO: fewer the variables
-		unsigned int tile_linear = thread_linear + (i << 8);
+		unsigned int tile_linear = linear - input_tile_start_pos;
 		unsigned int row_tile = (tile_linear >> 4) / 160;
 		unsigned int col_tile = (tile_linear >> 4) % 160;
 
-		tile[row_tile * 160 + col_tile][channel_n] = ((row >= 1) && (col >= 1) && (row < 161) && (col < 161))
-					          ?input[+ (((row-1) * 160 + (col-1)) << 4) \
-						         + channel_n]
+		tile[row_tile * 160U + col_tile][channel_n] = !((row < 1) || (row >= 161))
+					          ?input[linear - (10U << 8)]
 				       	          :static_cast<T>(0);
 
 		// tile[threadIdx.y * 60 + (threadIdx.x >> 4)][threadIdx.x & 15U] = 1?weight[weight_tile_start_pos + (i << 5) + ((threadIdx.y * 60) << 4) + threadIdx.x]:static_cast<T>(0);
@@ -254,25 +350,25 @@ __global__ void Convm1_input_resize_25600x16_25600x288(const T * input , T * D)
 	// T val[3][12];
 	// for(int i = -1, )
 
-	int offset0[9] = {-1, 0, 1, -1, 0, 1, -1, 0, 1};
-	int offset1[9] = {-1, -1, -1, 0, 0, 0, 1, 1, 1};
-
-
-#pragma unroll 10
 	for(int i = 0; i < 90; i++){
 		// global offsets
 		unsigned int linear = output_tile_start_pos + thread_linear + (i << 8);
 		// row/col in output
-		unsigned int row = linear / 144;
-		unsigned int col = linear - row * 144;
+		// unsigned int row = linear / 144;       // 0:25600
+		// unsigned int col = linear - row * 144; // 0:144
 		
-		// tile offsets
-		unsigned int linear_output_tile = thread_linear + (i << 8);
-		unsigned int row_tile = linear_output_tile / 144;
-		unsigned int col_tile = linear_output_tile - row_tile * 144;
-		unsigned int channel_linear = (col_tile >> 4);   // 0:9
-		unsigned int channel_n = col_tile & 15U;         // 0:16
-		D[row * 144 + col] = tile[(row_tile + offset1[channel_linear]) * 160 + offset0[channel_linear] + 1][channel_n];
+		// tile offsets in output
+		int linear_output_tile = linear - output_tile_start_pos;
+		int row_tile = linear_output_tile / 144; // 0:160
+		int col_tile = linear_output_tile - row_tile * 144; // 0:144
+		int channel_n = (col_tile / 9);   // 0:16
+		int channel_linear = col_tile - channel_n * 9;  // 0:9
+		D[linear] = !(
+			          (row_tile==0 && channel_linear%3==0) 
+			       || (row_tile==159 && channel_linear%3==2)
+			     )
+			    ?tile[row_tile + channel_linear / 3 * 160 + (channel_linear % 3) - 1][channel_n]
+			    :static_cast<T>(0);
 	}
 	
 }
@@ -303,8 +399,8 @@ void CPU_Conv_MxNxK_SiLU(const T * input, const T * weight, const T * bias, \
 
 
 template<typename T>
-__global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
-                const T * bias, T * D, unsigned int offset)
+__global__ void Conv_25600x16x32_SiLU(const T * input, const T * weight, \
+                const T * bias, T * D)
 {
 
 	// Input is a matrix transposed from img
@@ -329,7 +425,7 @@ __global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
 	// default block size 16 * 16
 	// each block tile compute a 16 * 16 tile
 
-	unsigned int start_pos = (offset * 3200U) << 5;
+	// unsigned int start_pos = (offset * 3200U) << 5;
 
 	unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
 	unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
@@ -362,12 +458,10 @@ __global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
 	// __shared__ T tiled_input_transposed[32][17]
 	
 	// An offset of thread_linear or (* + 256) on tiled input
-	tiled_input[thread_linear >> 5][thread_linear & 31U] = input[start_pos
-                                                    + (blockIdx.y << 9)
+	tiled_input[thread_linear >> 5][thread_linear & 31U] = input[(blockIdx.y << 9)
                                                     + thread_linear];
         tiled_input[(thread_linear >> 5) + 8][thread_linear & 31U]
-						            = input[start_pos
-                                                    + (blockIdx.y << 9)
+						            = input[(blockIdx.y << 9)
                                                     + thread_linear + 256U];
 
 	/*
@@ -405,7 +499,7 @@ __global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
 	sum = silu<T>(sum);
 
 	// input_size : output_size = 2:1, so it the offset
-	D[(start_pos >> 1) + (row << 4)+ col] = sum;
+	D[(row << 4)+ col] = sum;
 
 	return;
 }
@@ -413,8 +507,8 @@ __global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
 
 
 template<typename T>
-__global__ void Conv_3200x32x32_SiLU(const T * input, const T * weight, \
-                const T * bias, T * D, unsigned int offset)
+__global__ void Conv_25600x32x32_SiLU(const T * input, const T * weight, \
+                const T * bias, T * D)
 {
 	// Input is a matrix transposed from img
         //
@@ -427,7 +521,7 @@ __global__ void Conv_3200x32x32_SiLU(const T * input, const T * weight, \
 	// Typically 32 * 8 blocksize
 	// Each block compute 32 * 32 elements in output
 		
-	unsigned int start_pos = (offset * 3200U) << 5;
+	// unsigned int start_pos = (offset * 3200U) << 5;
 
         // unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
         // unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
@@ -456,13 +550,13 @@ __global__ void Conv_3200x32x32_SiLU(const T * input, const T * weight, \
 	__shared__ T A_tile[32][32];
 	__shared__ T B_tile[32][32];
 
-	A_tile[warp_id][lane_id] = input[start_pos + (blockIdx.y << 10)
+	A_tile[warp_id][lane_id] = input[(blockIdx.y << 10)
 						    + thread_linear];
-	A_tile[warp_id + 8][lane_id] = input[start_pos + (blockIdx.y << 10)
+	A_tile[warp_id + 8][lane_id] = input[(blockIdx.y << 10)
 						        + thread_linear + 256];
-	A_tile[warp_id + 16][lane_id] = input[start_pos + (blockIdx.y << 10)
+	A_tile[warp_id + 16][lane_id] = input[(blockIdx.y << 10)
                                                         + thread_linear + 512];
-	A_tile[warp_id + 24][lane_id] = input[start_pos + (blockIdx.y << 10)
+	A_tile[warp_id + 24][lane_id] = input[+ (blockIdx.y << 10)
                                                         + thread_linear + 768];
 
 	B_tile[warp_id][lane_id] = weight[thread_linear];
@@ -513,14 +607,14 @@ __global__ void Conv_3200x32x32_SiLU(const T * input, const T * weight, \
 	sum11 = silu<T>(sum11);
 
 	// output and input are with the same size
-	D[start_pos + (blockIdx.y << 10) + (tile_row_start << 5)
+	D[(blockIdx.y << 10) + (tile_row_start << 5)
 					      + tile_col_start] = sum00;
 
-	D[start_pos + (blockIdx.y << 10) + (tile_row_start << 5)
+	D[(blockIdx.y << 10) + (tile_row_start << 5)
 					      + tile_col_start + 1] = sum01;
-	D[start_pos + (blockIdx.y << 10) + ((tile_row_start + 1) << 5)
+	D[(blockIdx.y << 10) + ((tile_row_start + 1) << 5)
 					      + tile_col_start] = sum10;
-	D[start_pos + (blockIdx.y << 10) + ((tile_row_start + 1) << 5)
+	D[(blockIdx.y << 10) + ((tile_row_start + 1) << 5)
 					      + tile_col_start + 1] = sum11;
 }
 
@@ -542,7 +636,7 @@ void C3(const T * input, const T * weights, const T * biases, T * D, T * buffer)
 	}
 
 	for(int i = 0; i < 8; i++){
-		fused_3200x16x32_3200x16x16_SiLU<T>
+		fused_25600x16x32_25600x16x16_SiLU<T>
 			<<<gridsize_dummy, blocksize_dummy, 0, streams1[i]>>>
 			(input,
 		 	weights + CONV_WEIGHT_1_OFFSET, 
@@ -550,8 +644,7 @@ void C3(const T * input, const T * weights, const T * biases, T * D, T * buffer)
 		 	weights + CONV_WEIGHT_m0_OFFSET, 
 		 	biases + CONV_BIAS_m0_OFFSET, 
 		 	D,
-			buffer,
-			i
+			buffer
 		 	);
 	}
 
@@ -561,13 +654,12 @@ void C3(const T * input, const T * weights, const T * biases, T * D, T * buffer)
 
 	for(int i = 0; i < 8; i++){
 		std::cout << i << "-th iteration of Conv1 beginning." << std::endl;
-		Conv_3200x16x32_SiLU<T>
+		Conv_25600x16x32_SiLU<T>
 			<<<gridsize_dummy, blocksize_dummy, 0, streams2[i]>>>
 			(input,
 			 weights + CONV_WEIGHT_2_OFFSET,
 			 biases + CONV_BIAS_2_OFFSET,
-			 buffer,
-			 i
+			 buffer
 			 );
 	}
 
@@ -773,31 +865,31 @@ int main(int arg, char ** args){
 		CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 10));
 
 		dim3 block_size_1(32, 8);
-		dim3 grid_size_1(1, 100);
+		dim3 grid_size_1(1, 800);
 
-		Conv_3200x32x32_SiLU<float>
+		Conv_25600x32x32_SiLU<float>
                         <<<grid_size_1, block_size_1>>>
                                 (d_t_input_1, \
                                  d_t_weight_1, \
                                  d_t_bias_1, \
-                                 d_t_output_1, 0);
-		Conv_3200x32x32_SiLU<float>
+                                 d_t_output_1);
+		Conv_25600x32x32_SiLU<float>
                         <<<grid_size_1, block_size_1>>>
                                 (d_t_input_1, \
                                  d_t_weight_1, \
                                  d_t_bias_1, \
-                                 d_t_output_1, 0);
+                                 d_t_output_1);
 		// Timed run
 		cudaEventRecord(start);
-		Conv_3200x32x32_SiLU<float>
+		Conv_25600x32x32_SiLU<float>
 			<<<grid_size_1, block_size_1>>>
 				(d_t_input_1, \
 				 d_t_weight_1, \
 				 d_t_bias_1, \
-			         d_t_output_1, 0);
-		cudaEventRecord(stop);	
-		cudaEventSynchronize(stop);
-		cudaEventElapsedTime(&runtime, start, stop);
+			         d_t_output_1);
+		CHECK_CUDA_ERROR(cudaEventRecord(stop));	
+		CHECK_CUDA_ERROR(cudaEventSynchronize(stop));
+		CHECK_CUDA_ERROR(cudaEventElapsedTime(&runtime, start, stop));
 
 		CHECK_LAST_CUDA_ERROR();
 
@@ -890,28 +982,28 @@ int main(int arg, char ** args){
 		CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_2, 0, 100U * sizeof(float) << 9));
 
 		dim3 block_size_2(16, 16);
-		dim3 grid_size_2(1, 200);
-		Conv_3200x16x32_SiLU<float>
+		dim3 grid_size_2(1, 1600);
+		Conv_25600x16x32_SiLU<float>
 			<<<grid_size_2, block_size_2>>>
 				(d_t_input_2, \
 				 d_t_weight_2, \
 				 d_t_bias_2, \
-			         d_t_output_2, 0);
-		Conv_3200x16x32_SiLU<float>
+			         d_t_output_2);
+		Conv_25600x16x32_SiLU<float>
                         <<<grid_size_2, block_size_2>>>
                                 (d_t_input_2, \
                                  d_t_weight_2, \
                                  d_t_bias_2, \
-                                 d_t_output_2, 0);
+                                 d_t_output_2);
 		
 		// Timed run
 		cudaEventRecord(start);
-		Conv_3200x16x32_SiLU<float>
+		Conv_25600x16x32_SiLU<float>
                         <<<grid_size_2, block_size_2>>>
                                 (d_t_input_2, \
                                  d_t_weight_2, \
                                  d_t_bias_2, \
-                                 d_t_output_2, 0);
+                                 d_t_output_2);
 		cudaEventRecord(stop);
     		cudaEventSynchronize(stop);
     		cudaEventElapsedTime(&runtime, start, stop);
@@ -1031,11 +1123,11 @@ int main(int arg, char ** args){
                 CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_2, 0, 100U * sizeof(float) << 9));
 		
 
-		dim3 grid_size_3(1, 100);
+		dim3 grid_size_3(1, 800);
 		dim3 block_size_3(16, 16);	
 
 		
-		fused_3200x16x32_3200x16x16_SiLU<float>
+		fused_25600x16x32_25600x16x16_SiLU<float>
                         <<<grid_size_3, block_size_3>>>
                         (d_t_input_1,
                         d_t_weight_1,
@@ -1043,11 +1135,10 @@ int main(int arg, char ** args){
                         d_t_weight_2,
                         d_t_bias_2,
                         d_t_output_1,
-                        d_t_output_2,
-                        0
+                        d_t_output_2
                         );
 
-		fused_3200x16x32_3200x16x16_SiLU<float>
+		fused_25600x16x32_25600x16x16_SiLU<float>
                         <<<grid_size_3, block_size_3>>>
                         (d_t_input_1,
                         d_t_weight_1,
@@ -1055,13 +1146,12 @@ int main(int arg, char ** args){
                         d_t_weight_2,
                         d_t_bias_2,
                         d_t_output_1,
-                        d_t_output_2,
-                        0
+                        d_t_output_2
                         );
 
 		// Timed run
                 cudaEventRecord(start);
-		fused_3200x16x32_3200x16x16_SiLU<float>
+		fused_25600x16x32_25600x16x16_SiLU<float>
                         <<<grid_size_3, block_size_3>>>
                         (d_t_input_1,
                         d_t_weight_1,
@@ -1069,16 +1159,16 @@ int main(int arg, char ** args){
 			d_t_weight_2,
 			d_t_bias_2,
                         d_t_output_1,
-                        d_t_output_2,
-                        0
+                        d_t_output_2
                         );	
 
-		cudaEventRecord(stop);
-                cudaEventSynchronize(stop);
-                cudaEventElapsedTime(&runtime, start, stop);
+		CHECK_LAST_CUDA_ERROR();
+		
+		CHECK_CUDA_ERROR(cudaEventRecord(stop));
+                CHECK_CUDA_ERROR(cudaEventSynchronize(stop));
+                CHECK_CUDA_ERROR(cudaEventElapsedTime(&runtime, start, stop));
 		
 
-		CHECK_LAST_CUDA_ERROR();
 
 		CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 3200, 16, 32);	
 		CPU_Conv_MxNxK_SiLU(t_gt_1, t_weight_2, t_bias_2, t_gt_2, 3200, 16, 16);	
@@ -1157,8 +1247,170 @@ int main(int arg, char ** args){
                 std::cout << "Unit Test 4 on 3x3 Conv begins." << std::endl;
                 std::cout << "-----------------------------------------------"
                           << std::endl;
+		
+		
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_input_1, 100U * sizeof(float) << 12, cudaHostAllocDefault));
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_weight_1, 9U * sizeof(float) << 8, cudaHostAllocDefault));
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_bias_1, sizeof(float) << 4, cudaHostAllocDefault));
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_1, 100U * sizeof(float) << 12, cudaHostAllocDefault));
+		t_gt_1 = (float *)malloc(100U * sizeof(float) << 12);
+		memset((void*) t_gt_1, 0, 100U * sizeof(float) << 12);
+		
+		for(int i = 0; i < 409600; i++){
+                        t_input_1[i] = static_cast<float>(rand()) \
+                                       / static_cast<float>(RAND_MAX) - 0.5f;
+                }
 
-                std::cout << "Unit Test 4 on 3x3 Conv done." << std::endl
+		for(int i = 0; i < 2304; i++){
+                        t_weight_1[i] = static_cast<float>(rand()) \
+                                       / static_cast<float>(RAND_MAX) - 0.5f;
+                }
+
+		for(int i = 0; i < 16; i++){
+                        t_bias_1[i] = static_cast<float>(rand()) \
+                                       / static_cast<float>(RAND_MAX) - 0.5f;
+                }
+
+
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_1, 100U * sizeof(float) << 12));
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_1, 9U * sizeof(float) << 8));
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_1, sizeof(float) << 4));
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_1, 100U * sizeof(float) << 12));
+
+		// Use async copy instead
+                // CHECK_CUDA_ERROR(cudaMemcpy(d_t_input_1, t_input_1, 100U * \
+                                        sizeof(float) << 12, cudaMemcpyHostToDevice));
+                // CHECK_CUDA_ERROR(cudaMemcpy(d_t_weight_1, t_weight_1, 9U * \
+                                        sizeof(float) << 8,  cudaMemcpyHostToDevice));
+                CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_1, t_bias_1, \
+                                        sizeof(float) << 4, cudaMemcpyHostToDevice));
+                CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 12));
+
+		float * reshaped_input, * reshaped_weight;
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&reshaped_input, 900U * sizeof(float) << 12));
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&reshaped_weight, 9U * sizeof(float) << 8));
+
+		
+		cudaStream_t s1, s2, s3, ctrl;
+		cudaEvent_t e1, e2, e3;
+
+		CHECK_CUDA_ERROR(cudaStreamCreateWithFlags(&s1, cudaStreamNonBlocking));
+		CHECK_CUDA_ERROR(cudaStreamCreateWithFlags(&s2, cudaStreamNonBlocking));
+		CHECK_CUDA_ERROR(cudaStreamCreateWithFlags(&s3, cudaStreamNonBlocking));
+		CHECK_CUDA_ERROR(cudaStreamCreateWithFlags(&ctrl, cudaStreamNonBlocking));
+
+		
+		CHECK_CUDA_ERROR(cudaEventCreateWithFlags(&e1, cudaEventDisableTiming));
+		CHECK_CUDA_ERROR(cudaEventCreateWithFlags(&e2, cudaEventDisableTiming));
+
+		CHECK_CUDA_ERROR(cudaMemcpyAsync(d_t_input_1, t_input_1, 100U * \
+                                        sizeof(float) << 12, cudaMemcpyHostToDevice, s1));
+                CHECK_CUDA_ERROR(cudaMemcpyAsync(d_t_weight_1, t_weight_1, 9U * \
+                                        sizeof(float) << 8,  cudaMemcpyHostToDevice, s2));
+
+		dim3 block_size_0(32, 8);
+		dim3 grid_size_0(160, 1);
+		dim3 block_size_1(16, 16);
+		dim3 grid_size_1(9, 1);
+		dim3 block_size_2(16, 16);
+                dim3 grid_size_2(800, 1);
+
+		// Warm up run
+		Convm1_input_reshape_25600x16_25600x144<float>
+						       <<<grid_size_0, block_size_0, 0, s1>>>
+						       (d_t_input_1, reshaped_input);
+		CHECK_LAST_CUDA_ERROR();
+
+		Convm1_weight_reshape_16x16x3x3_144x16<float>
+						      <<<grid_size_1, block_size_1, 0, s2>>>
+						      (d_t_weight_1, reshaped_weight);
+		CHECK_LAST_CUDA_ERROR();
+
+		CHECK_CUDA_ERROR(cudaEventRecord(e1, s1));
+		CHECK_CUDA_ERROR(cudaEventRecord(e2, s2));
+		CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e2, 0));
+		CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e1, 0));
+
+
+		Convm1_25600x144x16_SiLU<float>
+					<<<grid_size_2, block_size_2>>>
+					(reshaped_input, reshaped_weight, d_t_bias_1, d_t_output_1);
+                CHECK_LAST_CUDA_ERROR();
+
+		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+		
+
+		// Timed run
+		CHECK_CUDA_ERROR(cudaEventRecord(start, ctrl));
+		CHECK_CUDA_ERROR(cudaStreamWaitEvent(s1, start, 0));
+		CHECK_CUDA_ERROR(cudaStreamWaitEvent(s2, start, 0));
+
+		Convm1_input_reshape_25600x16_25600x144<float>
+                                                       <<<grid_size_0, block_size_0, 0, s1>>>
+                                                       (d_t_input_1, reshaped_input);
+                CHECK_LAST_CUDA_ERROR();
+
+		Convm1_weight_reshape_16x16x3x3_144x16<float>
+                                                      <<<grid_size_1, block_size_1, 0, s2>>>
+                                                      (d_t_weight_1, reshaped_weight);
+                CHECK_LAST_CUDA_ERROR();
+
+
+		CHECK_CUDA_ERROR(cudaEventRecord(e1, s1));
+		CHECK_CUDA_ERROR(cudaEventRecord(e2, s2));
+		CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e2, 0));
+                CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e1, 0));
+                
+		Convm1_25600x144x16_SiLU<float>
+                                        <<<grid_size_2, block_size_2>>>
+                                        (reshaped_input, reshaped_weight, d_t_bias_1, d_t_output_1);
+                CHECK_LAST_CUDA_ERROR();
+		
+		CHECK_CUDA_ERROR(cudaEventRecord(stop, s3));
+		CHECK_CUDA_ERROR(cudaEventSynchronize(stop));
+
+		CHECK_CUDA_ERROR(cudaEventElapsedTime(&runtime, start, stop));
+
+		CHECK_CUDA_ERROR(cudaMemcpy(t_output_1, d_t_output_1, 100U * \
+                                        sizeof(float) << 12, cudaMemcpyDeviceToHost));
+
+		CPU_Convm1_25600x16_16x16x3x3(t_input_1, t_weight_1, t_bias_1, t_gt_1);
+
+		int false_num = 0;
+		bool flag4 = true;
+		for(int i = 0; i < 25600; i++){
+			for(int j = 0; j < 16; j++){
+				int offset = i * 16 + j;
+				if(abs(t_output_1[offset] - t_gt_1[offset]) > 0.0001f){
+					flag4 = false;
+					false_num++;
+				}
+				/* else{
+					std::cout << "correct at row: " << i << ", col: " << j << std::endl;
+				} */
+			}
+		}
+		
+		CHECK_CUDA_ERROR(cudaFreeHost(t_input_1));
+		CHECK_CUDA_ERROR(cudaFreeHost(t_bias_1));
+		CHECK_CUDA_ERROR(cudaFreeHost(t_weight_1));
+
+                CHECK_CUDA_ERROR(cudaFree(d_t_input_1));
+                CHECK_CUDA_ERROR(cudaFree(d_t_weight_1));
+                CHECK_CUDA_ERROR(cudaFree(d_t_bias_1));
+                CHECK_CUDA_ERROR(cudaFree(d_t_output_1));
+                CHECK_CUDA_ERROR(cudaFree(reshaped_input));
+                CHECK_CUDA_ERROR(cudaFree(reshaped_weight));
+		
+		free(t_gt_1);
+
+
+
+		std::cout << "Test 4 passed?: " << flag4 << std::endl;
+                std::cout << "Mistake on "<< false_num << " elements out of 409600" << std::endl;
+                std::cout << "Test 4 runtime: " << runtime * 1000 << " us" << std::endl;
+
+		std::cout << "Unit Test 4 on 3x3 Conv done." << std::endl
                         << std::endl;
 		std::cout << std::endl;
         }

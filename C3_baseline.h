@@ -75,29 +75,29 @@ void check_last(const char* const file, const int line)
 }
 
 template<typename T>
-__global__ void fused_3200x16x32_3200x16x16_SiLU(const T * input, const T * \
+__global__ void fused_25600x16x32_25600x16x16_SiLU(const T * input, const T * \
 		Conv1_weight, const T * Conv1_bias, const T * Convm0_weight,\
-	       	const T * Convm0_bias, T * D1, T * D2, unsigned int offset);
+	       	const T * Convm0_bias, T * D1, T * D2);
 
 template<typename T>
 __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
 		bias, T * D, unsigned int offset);
 
 template<typename T>
-__global__ void Convm1_3200x288x16_SiLU(const T * input, const T * weight, \
-		const T * bias, T * D, unsigned int offset);
+__global__ void Convm1_25600x144x16_SiLU(const T * input, const T * weight, \
+		const T * bias, T * D);
 
 // template<typename T>
 // __global__ void fused_3200x16x16_3200x16x16_SiLU();
 
 
 template<typename T>
-__global__ void Conv_3200x16x32_SiLU(const T * input, const T * weight, \
-		const T * bias, T * D, unsigned int offset);
+__global__ void Conv_25600x16x32_SiLU(const T * input, const T * weight, \
+		const T * bias, T * D);
 
 template<typename T>
-__global__ void Conv_3200x32x32_SiLU(const T * input, const T * weight, \
-		const T * bias, T * D, unsigned int offset);
+__global__ void Conv_25600x32x32_SiLU(const T * input, const T * weight, \
+		const T * bias, T * D);
 
 template<typename T>
 void C3(const T * img, const T * weights, const T * biases, T * D, T * Temp);
@@ -109,7 +109,7 @@ template<typename T>
 __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img);
 
 template<typename T>
-__global__ void Convm1_weight_resize_3x3x16x16_288x16(const T * weight , T * D);
+__global__ void Convm1_weight_reshape_16x16x3x3_144x16(const T * weight , T * D);
 
 template<typename T>
-__global__ void Convm1_input_resize_25600x16_25600x288(const T * weight , T * D);
+__global__ void Convm1_input_reshape_25600x16_25600x144(const T * weight , T * D);
