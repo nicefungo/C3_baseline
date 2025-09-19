@@ -620,70 +620,16 @@ __global__ void Conv_25600x32x32_SiLU(const T * input, const T * weight, \
 
 template<typename T>
 void C3(const T * input, const T * weights, const T * biases, T * D, T * buffer){
-	
-	// kernel size dummy
-	int gridsize_dummy = 1, blocksize_dummy = 1;
-	dim3 block_size(16, 16);
-
-	// Part_1
-	cudaStream_t streams1[8];
-	cudaStream_t streams2[8];
-	//cudaStream_t streams3[16];
-	//cudaStream_t streams4[16];
-
-	for(int i = 0; i < 8; i++){
-		cudaStreamCreate(&streams1[i]);
-	}
-
-	for(int i = 0; i < 8; i++){
-		fused_25600x16x32_25600x16x16_SiLU<T>
-			<<<gridsize_dummy, blocksize_dummy, 0, streams1[i]>>>
-			(input,
-		 	weights + CONV_WEIGHT_1_OFFSET, 
-		 	biases + CONV_BIAS_1_OFFSET, 
-		 	weights + CONV_WEIGHT_m0_OFFSET, 
-		 	biases + CONV_BIAS_m0_OFFSET, 
-		 	D,
-			buffer
-		 	);
-	}
-
-	for(int i = 0; i < 8; i++){
-		cudaStreamCreate(&streams2[i]);
-	}
-
-	for(int i = 0; i < 8; i++){
-		std::cout << i << "-th iteration of Conv1 beginning." << std::endl;
-		Conv_25600x16x32_SiLU<T>
-			<<<gridsize_dummy, blocksize_dummy, 0, streams2[i]>>>
-			(input,
-			 weights + CONV_WEIGHT_2_OFFSET,
-			 biases + CONV_BIAS_2_OFFSET,
-			 buffer
-			 );
-	}
-
-	// Temp code for freeing resources in main
-	// TODO: remove after finishing the following part
-	for(int i = 0; i < 8; i++){
-		CHECK_CUDA_ERROR(cudaStreamSynchronize(streams2[i]));
-		std::cout << i << "-th iteration of Conv1 finished." << std::endl;
-		CHECK_CUDA_ERROR(cudaStreamDestroy(streams2[i]));
-	}
-
-	for(int i = 0; i < 8; i++){
-		CHECK_CUDA_ERROR(cudaStreamSynchronize(streams1[i]));
-		CHECK_CUDA_ERROR(cudaStreamDestroy(streams1[i]));
-	}
-
-	// Part_2
+	cudaStream_t s1, s2, s3, s4;	
 }
 
 int main(int arg, char ** args){
 	bool test_flags[5];
-	if(arg>=2){
+	bool C3_test = args[1][0]=='1';
+
+	if(arg>=3){
 		for(int i = 0; i < 5; i++){
-			test_flags[i] = (args[1][i]=='1');
+			test_flags[i] = (args[2][i]=='1');
 		}
 	
 	}
@@ -708,7 +654,7 @@ int main(int arg, char ** args){
 
 	
 	// Use pinned mem instead
-	// float * buffer = (float *)malloc(OUTPUT_SIZE * sizeof(float)); 
+	// f:qloat * buffer = (float *)malloc(OUTPUT_SIZE * sizeof(float)); 
 	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&buffer, OUTPUT_SIZE * sizeof(float), cudaHostAllocDefault));
 	
 
@@ -742,6 +688,10 @@ int main(int arg, char ** args){
 	
 
 	float * d_input, * d_weights, * d_biases, * d_output, * d_buffer, * d_temp_input_1, * d_temp_input_2;
+
+	// Start timing
+
+
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_input, INPUT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_temp_input_1, INPUT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_temp_input_2, INPUT_SIZE * sizeof(float)));
@@ -751,7 +701,10 @@ int main(int arg, char ** args){
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_buffer, OUTPUT_SIZE * sizeof(float)));
 
 
-	CHECK_CUDA_ERROR(cudaMemcpy(d_input, input, 100U * sizeof(float) << 13, cudaMemcpyHostToDevice));
+	// Or start timing here?
+	CHECK_CUDA_ERROR(cudaMemcpy(d_input, input, INPUT_SIZE, cudaMemcpyHostToDevice));
+	CHECK_CUDA_ERROR(cudaMemcpy(d_weights, weights, CONV_WEIGHT_SIZE, cudaMemcpyHostToDevice));
+	CHECK_CUDA_ERROR(cudaMemcpy(d_biases, biases, CONV_BIAS_SIZE, cudaMemcpyHostToDevice));
 
 	dim3 blocksize(32, 32);
         dim3 gridsize(800, 1);
@@ -795,28 +748,56 @@ int main(int arg, char ** args){
 	free(temp_input_1);
 	free(temp_input_2);
 
+	// TODO: finish C3 Test
+        // TODO: There are unsolved illegal mem accesses in Part_1 C3
+        // C3<float>(input, weights, biases, output, buffer);
 
-		// Unit tests
-		std::cout << "-----------------------------------------------" 
-			<< std::endl
-			<< "Unit tests begin" << std::endl
-                	<< "-----------------------------------------------"
-                	<< std::endl
-			<< std::endl;
+        CHECK_LAST_CUDA_ERROR();
+        CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
-		cudaEvent_t start, stop;
-		cudaEventCreate(&start);
-    		cudaEventCreate(&stop);
+        CHECK_CUDA_ERROR(cudaFree(d_input));
+        CHECK_CUDA_ERROR(cudaFree(d_weights));
+        CHECK_CUDA_ERROR(cudaFree(d_biases));
+        CHECK_CUDA_ERROR(cudaFree(d_output));
+        CHECK_CUDA_ERROR(cudaFree(d_buffer));
+
+        CHECK_CUDA_ERROR(cudaFreeHost(input));
+        CHECK_CUDA_ERROR(cudaFreeHost(weights));
+        CHECK_CUDA_ERROR(cudaFreeHost(biases));
+        CHECK_CUDA_ERROR(cudaFreeHost(output));
+        CHECK_CUDA_ERROR(cudaFreeHost(buffer));
+
+        // Use pinned memory instead
+        // free(input); free(weights); free(biases); free(output); free(buffer);
+
+        CHECK_CUDA_ERROR(cudaDeviceReset());
+        
+
+	if(arg <= 2){
+        	return 0;
+	}
+
+	// Unit tests
+	std::cout << "-----------------------------------------------" 
+		<< std::endl
+		<< "Unit tests begin" << std::endl
+                << "-----------------------------------------------"
+                << std::endl
+		<< std::endl;
+
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+    	cudaEventCreate(&stop);
 		
 
 		
-		float * t_input_1, * t_weight_1, * t_bias_1, * t_output_1, * t_gt_1;
-		float * d_t_input_1, * d_t_weight_1, * d_t_bias_1, * d_t_output_1;
+	float * t_input_1, * t_weight_1, * t_bias_1, * t_output_1, * t_gt_1;
+	float * d_t_input_1, * d_t_weight_1, * d_t_bias_1, * d_t_output_1;
 		
-		float * t_input_2, * t_weight_2, * t_bias_2, * t_output_2, * t_gt_2;
-		float * d_t_input_2, * d_t_weight_2, * d_t_bias_2, * d_t_output_2;
+	float * t_input_2, * t_weight_2, * t_bias_2, * t_output_2, * t_gt_2;
+	float * d_t_input_2, * d_t_weight_2, * d_t_bias_2, * d_t_output_2;
 
-		float runtime;
+	float runtime;
 
 	if(test_flags[0]){	
 		// Test for Conv 3200 * 32 * 32 with Gelu activation
@@ -826,17 +807,17 @@ int main(int arg, char ** args){
 		std::cout << "-----------------------------------------------"
 			  << std::endl;
 
-		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_input_1, 100U * sizeof(float) << 10, cudaHostAllocDefault));
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_input_1, 100U * sizeof(float) << 13, cudaHostAllocDefault));
 		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_weight_1, sizeof(float) << 10, cudaHostAllocDefault));
 		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_bias_1, sizeof(float) << 5, cudaHostAllocDefault));
 
 		
 
-		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_1, 100U * sizeof(float) << 10, cudaHostAllocDefault));
-		t_gt_1 = (float *)malloc(100U * sizeof(float) << 10);
-		memset((void*) t_gt_1, 0, 100U * sizeof(float) << 10);
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_1, 100U * sizeof(float) << 13, cudaHostAllocDefault));
+		t_gt_1 = (float *)malloc(100U * sizeof(float) << 13);
+		memset((void*) t_gt_1, 0, 100U * sizeof(float) << 13);
 
-		for(int i = 0; i < 102400; i++){
+		for(int i = 0; i < 819200; i++){
 			t_input_1[i] = static_cast<float>(rand()) \
 				       / static_cast<float>(RAND_MAX) - 0.5f;
 		}
@@ -851,18 +832,18 @@ int main(int arg, char ** args){
                                        / static_cast<float>(RAND_MAX);
                 }
 
-		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_1, 100U * sizeof(float) << 10));
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_1, 100U * sizeof(float) << 13));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_1, sizeof(float) << 10));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_1, sizeof(float) << 5));
-		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_1, 100U * sizeof(float) << 10));
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_1, 100U * sizeof(float) << 13));
 			
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_input_1, t_input_1, 100U * \ 
-					sizeof(float) << 10, cudaMemcpyHostToDevice));
+					sizeof(float) << 13, cudaMemcpyHostToDevice));
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_weight_1, t_weight_1, \
 					sizeof(float) << 10,  cudaMemcpyHostToDevice));
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_1, t_bias_1, \ 
                                         sizeof(float) << 5, cudaMemcpyHostToDevice));
-		CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 10));
+		CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 13));
 
 		dim3 block_size_1(32, 8);
 		dim3 grid_size_1(1, 800);
@@ -894,13 +875,13 @@ int main(int arg, char ** args){
 		CHECK_LAST_CUDA_ERROR();
 
 		CHECK_CUDA_ERROR(cudaMemcpy(t_output_1, d_t_output_1, 100U * \
-					sizeof(float) << 10, cudaMemcpyDeviceToHost));
+					sizeof(float) << 13, cudaMemcpyDeviceToHost));
 
-		CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 3200, 32, 32);	
+		CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 25600, 32, 32);	
 
 		bool flag1 = true;
 		int false_num = 0;
-		for(int i = 0; i < 3200; i++){
+		for(int i = 0; i < 25600; i++){
 			for(int j = 0; j < 32; j++){
 				/* if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
 					std::cout << t_gt_1[i * 32 + j] << " " << t_output_1[i * 32 + j] << std::endl;
@@ -912,7 +893,7 @@ int main(int arg, char ** args){
 			}
 		}
 		std::cout << "Test 1 passed?: " << flag1 << std::endl;
-		std::cout << "Mistake on "<< false_num << " elements out of 102400" << std::endl;
+		std::cout << "Mistake on "<< false_num << " elements out of 819200" << std::endl;
 		std::cout << "Test 1 runtime: " << runtime * 1000 << " us" << std::endl;
 		
 	       	CHECK_CUDA_ERROR(cudaFreeHost(t_input_1));	
@@ -936,24 +917,24 @@ int main(int arg, char ** args){
 	}
 
 	if(test_flags[1]){
-		// Test for Conv 3200 * 16 * 32 with Gelu activation
+		// Test for Conv 25600 * 16 * 32 with Gelu activation
 		std::cout << "-----------------------------------------------" << std::endl;
 		std::cout << "Unit Test 2 on Conv1 begins." << std::endl;
 		std::cout << "-----------------------------------------------"
 			  << std::endl;
 
 
-		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_input_2, 100U * sizeof(float) << 10, cudaHostAllocDefault));
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_input_2, 100U * sizeof(float) << 13, cudaHostAllocDefault));
 		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_weight_2, sizeof(float) << 9, cudaHostAllocDefault));
 		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_bias_2, sizeof(float) << 4, cudaHostAllocDefault));
 
 		
 
-		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_2, 100U * sizeof(float) << 9, cudaHostAllocDefault));
-		t_gt_2 = (float *)malloc(100U * sizeof(float) << 9);
-		memset((void*) t_gt_2, 0, 100U * sizeof(float) << 9);
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_2, 100U * sizeof(float) << 12, cudaHostAllocDefault));
+		t_gt_2 = (float *)malloc(100U * sizeof(float) << 12);
+		memset((void*) t_gt_2, 0, 100U * sizeof(float) << 12);
 
-		for(int i = 0; i < 102400; i++){
+		for(int i = 0; i < 819200; i++){
 			t_input_2[i] = static_cast<float>(rand()) \
 				       / static_cast<float>(RAND_MAX) - 0.5f;
 		}
@@ -968,18 +949,18 @@ int main(int arg, char ** args){
                                        / static_cast<float>(RAND_MAX);
                 }
 
-		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_2, 100U * sizeof(float) << 10));
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_2, 100U * sizeof(float) << 13));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_2, sizeof(float) << 9));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_2, sizeof(float) << 4));
-		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_2, 100U * sizeof(float) << 9));
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_2, 100U * sizeof(float) << 12));
 			
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_input_2, t_input_2, 100U * \ 
-					sizeof(float) << 10, cudaMemcpyHostToDevice));
+					sizeof(float) << 13, cudaMemcpyHostToDevice));
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_weight_2, t_weight_2, \
 					sizeof(float) << 9,  cudaMemcpyHostToDevice));
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_2, t_bias_2, \ 
                                         sizeof(float) << 4, cudaMemcpyHostToDevice));
-		CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_2, 0, 100U * sizeof(float) << 9));
+		CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_2, 0, 100U * sizeof(float) << 12));
 
 		dim3 block_size_2(16, 16);
 		dim3 grid_size_2(1, 1600);
@@ -1012,13 +993,13 @@ int main(int arg, char ** args){
 		CHECK_LAST_CUDA_ERROR();
 
 		CHECK_CUDA_ERROR(cudaMemcpy(t_output_2, d_t_output_2, 100U * \
-					sizeof(float) << 9, cudaMemcpyDeviceToHost));
+					sizeof(float) << 12, cudaMemcpyDeviceToHost));
 
-		CPU_Conv_MxNxK_SiLU(t_input_2, t_weight_2, t_bias_2, t_gt_2, 3200, 16, 32);	
+		CPU_Conv_MxNxK_SiLU(t_input_2, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 32);	
 
 		bool flag2 = true;
 		int false_num = 0;
-		for(int i = 0; i < 3200; i++){
+		for(int i = 0; i < 25600; i++){
 			for(int j = 0; j < 16; j++){
 				/* if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
 					std::cout << t_gt_2[i * 16 + j] << " " << t_output_2[i * 16 + j] << std::endl;
@@ -1030,7 +1011,7 @@ int main(int arg, char ** args){
 			}
 		}
 		std::cout << "Test 2 passed?: " << flag2 << std::endl;
-		std::cout << "Mistake on "<< false_num << " elements out of 51200" << std::endl;
+		std::cout << "Mistake on "<< false_num << " elements out of 409600" << std::endl;
 		std::cout << "Test 2 runtime: " << runtime * 1000 << " us" << std::endl;
 		
 	       	CHECK_CUDA_ERROR(cudaFreeHost(t_input_2));	
@@ -1060,7 +1041,7 @@ int main(int arg, char ** args){
                           << std::endl;
 		
 		
-		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_input_1, 100U * sizeof(float) << 10, cudaHostAllocDefault));
+		CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_input_1, 100U * sizeof(float) << 13, cudaHostAllocDefault));
                 CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_weight_1, sizeof(float) << 9, cudaHostAllocDefault));
                 CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_weight_2, sizeof(float) << 8, cudaHostAllocDefault));
                 CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_bias_1, sizeof(float) << 4, cudaHostAllocDefault));
@@ -1068,14 +1049,14 @@ int main(int arg, char ** args){
 
 
 
-                CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_1, 100U * sizeof(float) << 9, cudaHostAllocDefault));
-                CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_2, 100U * sizeof(float) << 9, cudaHostAllocDefault));
-                t_gt_1 = (float *)malloc(100U * sizeof(float) << 9);
-                t_gt_2 = (float *)malloc(100U * sizeof(float) << 9);
-                memset((void*) t_gt_1, 0, 100U * sizeof(float) << 9);
-                memset((void*) t_gt_2, 0, 100U * sizeof(float) << 9);
+                CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_1, 100U * sizeof(float) << 12, cudaHostAllocDefault));
+                CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_2, 100U * sizeof(float) << 12, cudaHostAllocDefault));
+                t_gt_1 = (float *)malloc(100U * sizeof(float) << 12);
+                t_gt_2 = (float *)malloc(100U * sizeof(float) << 12);
+                memset((void*) t_gt_1, 0, 100U * sizeof(float) << 12);
+                memset((void*) t_gt_2, 0, 100U * sizeof(float) << 12);
 		
-		for(int i = 0; i < 102400; i++){
+		for(int i = 0; i < 819200; i++){
                         t_input_1[i] = static_cast<float>(rand()) \
                                        / static_cast<float>(RAND_MAX) - 0.5f;
                 }
@@ -1101,16 +1082,16 @@ int main(int arg, char ** args){
                 }
 
 
-		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_1, 100U * sizeof(float) << 10));
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_1, 100U * sizeof(float) << 13));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_1, sizeof(float) << 9));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_1, sizeof(float) << 4));
-                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_1, 100U * sizeof(float) << 9));
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_1, 100U * sizeof(float) << 12));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_2, sizeof(float) << 8));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_2, sizeof(float) << 4));
-                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_2, 100U * sizeof(float) << 9));
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_2, 100U * sizeof(float) << 12));
 
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_input_1, t_input_1, 100U * \
-                                        sizeof(float) << 10, cudaMemcpyHostToDevice));
+                                        sizeof(float) << 13, cudaMemcpyHostToDevice));
                 CHECK_CUDA_ERROR(cudaMemcpy(d_t_weight_1, t_weight_1, \
                                         sizeof(float) << 9,  cudaMemcpyHostToDevice));
                 CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_1, t_bias_1, \
@@ -1119,8 +1100,8 @@ int main(int arg, char ** args){
                                         sizeof(float) << 8,  cudaMemcpyHostToDevice));
                 CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_2, t_bias_2, \
                                         sizeof(float) << 4, cudaMemcpyHostToDevice));
-                CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 9));
-                CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_2, 0, 100U * sizeof(float) << 9));
+                CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 12));
+                CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_2, 0, 100U * sizeof(float) << 12));
 		
 
 		dim3 grid_size_3(1, 800);
@@ -1170,19 +1151,19 @@ int main(int arg, char ** args){
 		
 
 
-		CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 3200, 16, 32);	
-		CPU_Conv_MxNxK_SiLU(t_gt_1, t_weight_2, t_bias_2, t_gt_2, 3200, 16, 16);	
+		CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 25600, 16, 32);	
+		CPU_Conv_MxNxK_SiLU(t_gt_1, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 16);	
 		
 		CHECK_CUDA_ERROR(cudaMemcpy(t_output_1, d_t_output_1, 100U * \
-                                        sizeof(float) << 9, cudaMemcpyDeviceToHost));
+                                        sizeof(float) << 12, cudaMemcpyDeviceToHost));
 
 		CHECK_CUDA_ERROR(cudaMemcpy(t_output_2, d_t_output_2, 100U * \
-                                        sizeof(float) << 9, cudaMemcpyDeviceToHost));
+                                        sizeof(float) << 12, cudaMemcpyDeviceToHost));
 		
 
 		bool flag3 = true;
                 int false_num = 0;
-                for(int i = 0; i < 3200; i++){
+                for(int i = 0; i < 25600; i++){
                         for(int j = 0; j < 16; j++){
                                 /* if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
                                         std::cout << t_gt_2[i * 16 + j] << " " << t_output_2[i * 16 + j] << std::endl;
@@ -1197,7 +1178,7 @@ int main(int arg, char ** args){
                         }
                 }
 
-		for(int i = 0; i < 3200; i++){
+		for(int i = 0; i < 25600; i++){
                         for(int j = 0; j < 16; j++){
                                 /*if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
                                         std::cout << t_gt_2[i * 16 + j] << " " << t_output_2[i * 16 + j] << std::endl;
@@ -1213,7 +1194,7 @@ int main(int arg, char ** args){
                 }
 
                 std::cout << "Test 3 passed?: " << flag3 << std::endl;
-                std::cout << "Mistake on "<< false_num << " elements out of 51200 * 2" << std::endl;
+                std::cout << "Mistake on "<< false_num << " elements out of 819200 (409600 * 2)" << std::endl;
                 std::cout << "Test 3 runtime: " << runtime * 1000 << " us" << std::endl;
 
 		CHECK_CUDA_ERROR(cudaFreeHost(t_input_1));
@@ -1430,35 +1411,6 @@ int main(int arg, char ** args){
 
 	cudaEventDestroy(start);
     	cudaEventDestroy(stop);
-
-	
-
-
-	// Init or IO with ONNX exported files
-	// TODO
-
-
-	// TODO: finish C3 Test
-	// TODO: There are unsolved illegal mem accesses in Part_1 C3
-	// C3<float>(input, weights, biases, output, buffer);
-	
-	CHECK_LAST_CUDA_ERROR();
-	CHECK_CUDA_ERROR(cudaDeviceSynchronize());
-
-	CHECK_CUDA_ERROR(cudaFree(d_input));
-	CHECK_CUDA_ERROR(cudaFree(d_weights));
-	CHECK_CUDA_ERROR(cudaFree(d_biases));
-	CHECK_CUDA_ERROR(cudaFree(d_output));
-	CHECK_CUDA_ERROR(cudaFree(d_buffer));
-
-	CHECK_CUDA_ERROR(cudaFreeHost(input));
-	CHECK_CUDA_ERROR(cudaFreeHost(weights));
-	CHECK_CUDA_ERROR(cudaFreeHost(biases));
-	CHECK_CUDA_ERROR(cudaFreeHost(output));
-	CHECK_CUDA_ERROR(cudaFreeHost(buffer));
-	
-	// Use pinned memory instead
-	// free(input); free(weights); free(biases); free(output); free(buffer);
 	
 	CHECK_CUDA_ERROR(cudaDeviceReset());
 	return 0;
