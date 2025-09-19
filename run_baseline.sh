@@ -1,4 +1,4 @@
 
 echo "run \`sudo jetson_clocks\` first" &&
-nvcc -arch=sm_87 -o C3_baseline -w C3_baseline.cu ./cnpy/cnpy.cpp -lz && ./C3_baseline 1 11110
+nvcc -arch=sm_87 -o C3_baseline -w C3_baseline.cu ./cnpy/cnpy.cpp -lz && rm output.txt && ./C3_baseline 1 >> output.txt
 

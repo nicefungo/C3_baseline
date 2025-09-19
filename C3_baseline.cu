@@ -669,11 +669,13 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 	cudaEventCreateWithFlags(&e6, cudaEventDisableTiming);
 
 	dim3 blocksize_im2col(32, 32);	
-	dim3 gridsize_im2col(1600, 1);	
+	dim3 gridsize_im2col(800, 1);	
 	im2col_32x160x160_25600x32_transpose<float>
 					    <<<gridsize_im2col, blocksize_im2col, 0, s1>>>
 					    (img, input);
 
+	
+	CHECK_LAST_CUDA_ERROR();
 	
 	dim3 blocksize_wreshape(16, 16);	
 	dim3 gridsize_wreshape(9, 1);	
@@ -683,51 +685,121 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 					     reshaped_weight);
 
 
+	CHECK_LAST_CUDA_ERROR();
+	
 	CHECK_CUDA_ERROR(cudaEventRecord(e1, s1));
+	// CHECK_CUDA_ERROR(cudaEventSynchronize(e1));
 	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e1, 0));
 	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s4, e1, 0));
 
-	/* dim3 blocksize_conv1(16, 16);
-	dim3 gridsize_conv1(1, 1600);
-	Conv_25600x16x32_SiLU<float><<<gridsize_conv1, blocksize_conv1, 0, s3>>>
-					(input, 
-					 (float *)(weights + CONV_WEIGHT_1_OFFSET),
-					 (float *)(biases + CONV_BIAS_1_OFFSET),
-					 D); */
-
-	
-	/* dim3 blocksize_fused(16, 16);
+	dim3 blocksize_fused(16, 16);
         dim3 gridsize_fused(1, 800);
 	fused_25600x16x32_25600x16x16_SiLU_adding<float>
-						 <<<blocksize_fused, gridsize_fused, 0, s3>>>
-						 (D,) */
+						 <<<gridsize_fused, blocksize_fused, 0, s3>>>
+						 ( input,
+						  (float *)(weights + CONV_WEIGHT_1_OFFSET),
+						  (float *)(biases + CONV_BIAS_1_OFFSET),
+						  (float *)(weights + CONV_WEIGHT_m0_OFFSET),
+						  (float *)(biases + CONV_BIAS_m0_OFFSET),
+						  buffer1
+						  );
 
 
-
+	CHECK_LAST_CUDA_ERROR();
 
 	dim3 blocksize_conv2(16, 16);
         dim3 gridsize_conv2(1, 1600);
         Conv_25600x16x32_SiLU<float><<<gridsize_conv2, blocksize_conv2, 0, s4>>>
-                                        (input,
+                                        ( input,
                                          (float *)(weights + CONV_WEIGHT_2_OFFSET),
                                          (float *)(biases + CONV_BIAS_2_OFFSET),
-                                         buffer1);
+                                         buffer2);
 
 
+	CHECK_LAST_CUDA_ERROR();
+	
+	CHECK_CUDA_ERROR(cudaEventRecord(e4, s4));
+	// CHECK_CUDA_ERROR(cudaEventSynchronize(e4));
+	
 	dim3 blocksize_ireshape(32, 8);
         dim3 gridsize_ireshape(160, 1);
 	Convm1_input_reshape_25600x16_25600x144<float>
 					       <<<gridsize_ireshape, blocksize_ireshape, 0, s3>>>
 					       (buffer1,
 						reshaped_mat);
+
+	CHECK_LAST_CUDA_ERROR();
+	
 	CHECK_CUDA_ERROR(cudaEventRecord(e2, s2));
+	// CHECK_CUDA_ERROR(cudaEventSynchronize(e2));
 	CHECK_CUDA_ERROR(cudaEventRecord(e3, s3));
+	// CHECK_CUDA_ERROR(cudaEventSynchronize(e3));
 	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s5, e2, 0));
 	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s5, e3, 0));
 
+	dim3 blocksize_convm1(16, 16);
+        dim3 gridsize_convm1(800, 1);
+	Convm1_25600x144x16_SiLU<float><<<gridsize_convm1, blocksize_convm1, 0, s5>>>
+				       (reshaped_mat,
+					reshaped_weight,
+					(float*)(biases + CONV_BIAS_m1_OFFSET),
+					buffer1);
+	
+	CHECK_LAST_CUDA_ERROR();
+	
+	CHECK_CUDA_ERROR(cudaEventRecord(e5, s5));
+	// CHECK_CUDA_ERROR(cudaEventSynchronize(e5));
+	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s6, e4, 0));
+	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s6, e5, 0));
 
+
+	dim3 blocksize_cct(16, 16);
+        dim3 gridsize_cct(800, 1);
+	concat_25600x16_25600x16_25600x32<float>
+					 <<<gridsize_cct, blocksize_cct, 0, s6>>>
+					 (buffer1,
+					  buffer2,
+					  buffer3
+					  );
+
+	CHECK_LAST_CUDA_ERROR();
 	
+	dim3 blocksize_conv3(32, 8);
+        dim3 gridsize_conv3(1, 800);
+	Conv_25600x32x32_SiLU<float><<<gridsize_conv3, blocksize_conv3, 0, s6>>>
+				    (buffer3,
+				     (float*) (weights + CONV_WEIGHT_3_OFFSET),
+				     (float*) (biases + CONV_BIAS_3_OFFSET),
+				     D);
+
+	CHECK_LAST_CUDA_ERROR();
+
+	dim3 blocksize_col2im(32, 32);
+        dim3 gridsize_col2im(800, 1);
+	col2im_25600x32_32x160x160_transpose<float>
+					    <<<gridsize_col2im, blocksize_col2im, 0, s6>>>
+					    (D,
+					     out_img);
+
+	CHECK_LAST_CUDA_ERROR();
 	
+	CHECK_CUDA_ERROR(cudaEventRecord(e6, s6));
+	CHECK_CUDA_ERROR(cudaEventSynchronize(e6));
+	
+	CHECK_CUDA_ERROR(cudaStreamDestroy(s1));
+	CHECK_CUDA_ERROR(cudaStreamDestroy(s2));
+	CHECK_CUDA_ERROR(cudaStreamDestroy(s3));
+	CHECK_CUDA_ERROR(cudaStreamDestroy(s4));
+	CHECK_CUDA_ERROR(cudaStreamDestroy(s5));
+	CHECK_CUDA_ERROR(cudaStreamDestroy(s6));
+	
+	CHECK_CUDA_ERROR(cudaEventDestroy(e1));
+	CHECK_CUDA_ERROR(cudaEventDestroy(e2));
+	CHECK_CUDA_ERROR(cudaEventDestroy(e3));
+	CHECK_CUDA_ERROR(cudaEventDestroy(e4));
+	CHECK_CUDA_ERROR(cudaEventDestroy(e5));
+	CHECK_CUDA_ERROR(cudaEventDestroy(e6));
+
 
 }
 
@@ -742,11 +814,12 @@ int main(int arg, char ** args){
 	
 	}
 
-	float * input, * weights, * biases, * output, * buffer;
-	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&input, INPUT_SIZE * sizeof(float), cudaHostAllocDefault));
+	float * img, * weights, * biases, * buffer1, *buffer2, * buffer3, * reshaped_mat, * reshaped_bias, * out_img;
+	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&img, INPUT_SIZE * sizeof(float), cudaHostAllocDefault));
+	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&input, INPUT_SIZE * sizeof(float), cudaHostAllocDefault));
 	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&weights, CONV_WEIGHT_SIZE * sizeof(float), cudaHostAllocDefault));
 	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&biases, CONV_BIAS_SIZE * sizeof(float), cudaHostAllocDefault));
-	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&output, OUTPUT_SIZE * sizeof(float), cudaHostAllocDefault));
+	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&output, OUTPUT_SIZE * sizeof(float), cudaHostAllocDefault));
 
 	// Use pinned mem instead
 	// float * input = (float *)malloc(INPUT_SIZE * sizeof(float));
@@ -763,7 +836,12 @@ int main(int arg, char ** args){
 	
 	// Use pinned mem instead
 	// f:qloat * buffer = (float *)malloc(OUTPUT_SIZE * sizeof(float)); 
-	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&buffer, OUTPUT_SIZE * sizeof(float), cudaHostAllocDefault));
+	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&buffer1, OUTPUT_SIZE * sizeof(float), cudaHostAllocDefault));
+	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&buffer2, OUTPUT_SIZE * sizeof(float), cudaHostAllocDefault));
+	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&buffer3, OUTPUT_SIZE * sizeof(float) << 1, cudaHostAllocDefault));
+	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&reshaped_mat, 9U * OUTPUT_SIZE * sizeof(float) >> 1, cudaHostAllocDefault));
+	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&reshaped_weight, (9U << 8) * sizeof(float), cudaHostAllocDefault));
+	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&out_img, OUTPUT_SIZE * sizeof(float), cudaHostAllocDefault));
 	
 
 	load_npy_into<float>("parameters/cv1.conv.bias", (float *)(biases + CONV_BIAS_1_OFFSET), CONV_BIAS_1_SIZE);
@@ -786,7 +864,7 @@ int main(int arg, char ** args){
 	// loading input
 	
 
-	load_input_into<float>("data/inputs/input_0.txt", input, INPUT_SIZE);
+	load_input_into<float>("data/inputs/input_0.txt", img, INPUT_SIZE);
 	/* for(int i = 0; i < 16; i++){
 		for(int j = 0; j < 16; j++){
 			std::cout << input[i * 25600 + j] << " ";
@@ -795,26 +873,39 @@ int main(int arg, char ** args){
 	} */
 	
 
-	float * d_input, * d_weights, * d_biases, * d_output, * d_buffer, * d_temp_input_1, * d_temp_input_2;
+	float * d_img, * d_input, * d_weights, * d_biases, * d_output, * d_buffer1, * d_buffer2, * d_buffer3, * d_temp_input_1, * d_temp_input_2, * d_out_img, * d_reshaped_mat, * d_reshaped_weight; 
 
 	// Start timing
 
 
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_img, INPUT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_input, INPUT_SIZE * sizeof(float)));
+
+
+
+
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_temp_input_1, INPUT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_temp_input_2, INPUT_SIZE * sizeof(float)));
+	
+
+
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_weights, CONV_WEIGHT_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_biases, CONV_BIAS_SIZE * sizeof(float)));
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_output, OUTPUT_SIZE * sizeof(float)));
-	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_buffer, OUTPUT_SIZE * sizeof(float)));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_buffer1, OUTPUT_SIZE * sizeof(float)));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_buffer2, OUTPUT_SIZE * sizeof(float)));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_buffer3, OUTPUT_SIZE * sizeof(float)));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_out_img, OUTPUT_SIZE * sizeof(float)));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_reshaped_mat, 9U * OUTPUT_SIZE * sizeof(float) >> 1));
+	CHECK_CUDA_ERROR(cudaMalloc((void**)&d_reshaped_weight, (9U << 8) * sizeof(float)));
 
 
 	// Or start timing here?
-	CHECK_CUDA_ERROR(cudaMemcpy(d_input, input, INPUT_SIZE, cudaMemcpyHostToDevice));
-	CHECK_CUDA_ERROR(cudaMemcpy(d_weights, weights, CONV_WEIGHT_SIZE, cudaMemcpyHostToDevice));
-	CHECK_CUDA_ERROR(cudaMemcpy(d_biases, biases, CONV_BIAS_SIZE, cudaMemcpyHostToDevice));
+	CHECK_CUDA_ERROR(cudaMemcpy(d_img, img, INPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+	CHECK_CUDA_ERROR(cudaMemcpy(d_weights, weights, CONV_WEIGHT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+	CHECK_CUDA_ERROR(cudaMemcpy(d_biases, biases, CONV_BIAS_SIZE * sizeof(float), cudaMemcpyHostToDevice));
 
-	dim3 blocksize(32, 32);
+	/* dim3 blocksize(32, 32);
         dim3 gridsize(800, 1);
         im2col_32x160x160_25600x32_transpose<float><<<gridsize, blocksize>>>(d_input, d_temp_input_1);
 	
@@ -822,7 +913,7 @@ int main(int arg, char ** args){
 	
         col2im_25600x32_32x160x160_transpose<float><<<gridsize, blocksize>>>(d_temp_input_1, d_temp_input_2);
 
-	CHECK_LAST_CUDA_ERROR();
+	CHECK_LAST_CUDA_ERROR();*/
 
 	float * temp_input_1 = (float*)malloc(100U * sizeof(float) << 13);
 	float * temp_input_2 = (float*)malloc(100U * sizeof(float) << 13);
@@ -857,23 +948,56 @@ int main(int arg, char ** args){
 	free(temp_input_2);
 
 	// TODO: finish C3 Test
-        // TODO: There are unsolved illegal mem accesses in Part_1 C3
-        // C3<float>(input, weights, biases, output, buffer);
+        // TODO: There are unsolved illegal mem accesses in Part_1 C3i
+	cudaEvent_t C3_start, C3_stop;
+	float C3_runtime;
+	CHECK_CUDA_ERROR(cudaEventCreate(&C3_start));
+	CHECK_CUDA_ERROR(cudaEventCreate(&C3_stop));
 
-        CHECK_LAST_CUDA_ERROR();
+	CHECK_CUDA_ERROR(cudaEventRecord(C3_start, 0));
+        
+	C3<float>(d_img, d_input, d_weights, d_biases, d_output, d_buffer1, d_buffer2, d_buffer3, d_reshaped_mat, d_reshaped_weight, d_out_img);
+
         CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+	CHECK_CUDA_ERROR(cudaEventRecord(C3_stop, 0));
+	CHECK_CUDA_ERROR(cudaEventSynchronize(C3_stop));
+	CHECK_CUDA_ERROR(cudaEventElapsedTime(&C3_runtime, C3_start, C3_stop));
+	
+	std::cout << "C3 runtime: " << C3_runtime << " ms" << std::endl;
+
+	CHECK_LAST_CUDA_ERROR();
+
+        // CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+
+	CHECK_CUDA_ERROR(cudaMemcpy(out_img, d_out_img, OUTPUT_SIZE * sizeof(float), cudaMemcpyDeviceToHost));
+
+	for(int i = 0; i < 32; i++){
+		for(int j = 0; j < 25600; j ++){
+			std::cout << out_img[i * 25600 + j] << " ";
+		}
+		std::cout << std::endl;
+	}
+	std::cout << std::endl;
+
 
         CHECK_CUDA_ERROR(cudaFree(d_input));
         CHECK_CUDA_ERROR(cudaFree(d_weights));
         CHECK_CUDA_ERROR(cudaFree(d_biases));
         CHECK_CUDA_ERROR(cudaFree(d_output));
-        CHECK_CUDA_ERROR(cudaFree(d_buffer));
+        CHECK_CUDA_ERROR(cudaFree(d_buffer1));
+        CHECK_CUDA_ERROR(cudaFree(d_buffer2));
+        CHECK_CUDA_ERROR(cudaFree(d_buffer3));
+        CHECK_CUDA_ERROR(cudaFree(d_out_img));
 
-        CHECK_CUDA_ERROR(cudaFreeHost(input));
+        CHECK_CUDA_ERROR(cudaFreeHost(img));
+        // CHECK_CUDA_ERROR(cudaFreeHost(input));
         CHECK_CUDA_ERROR(cudaFreeHost(weights));
         CHECK_CUDA_ERROR(cudaFreeHost(biases));
-        CHECK_CUDA_ERROR(cudaFreeHost(output));
-        CHECK_CUDA_ERROR(cudaFreeHost(buffer));
+        // CHECK_CUDA_ERROR(cudaFreeHost(output));
+        CHECK_CUDA_ERROR(cudaFreeHost(out_img));
+        // CHECK_CUDA_ERROR(cudaFreeHost(buffer1));
+        // CHECK_CUDA_ERROR(cudaFreeHost(buffer2));
+        // CHECK_CUDA_ERROR(cudaFreeHost(buffer3));
 
         // Use pinned memory instead
         // free(input); free(weights); free(biases); free(output); free(buffer);
@@ -881,9 +1005,9 @@ int main(int arg, char ** args){
         CHECK_CUDA_ERROR(cudaDeviceReset());
         
 
-	if(arg <= 2){
-        	return 0;
-	}
+	if(arg > 2){
+        
+	
 
 	// Unit tests
 	std::cout << "-----------------------------------------------" 
@@ -1520,9 +1644,9 @@ int main(int arg, char ** args){
 		std::cout << std::endl;
         }
 
-	cudaEventDestroy(start);
-    	cudaEventDestroy(stop);
-	
+	CHECK_CUDA_ERROR(cudaEventDestroy(start));
+    	CHECK_CUDA_ERROR(cudaEventDestroy(stop));
+  }
 	CHECK_CUDA_ERROR(cudaDeviceReset());
 	return 0;
 }
