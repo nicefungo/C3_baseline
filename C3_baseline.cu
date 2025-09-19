@@ -625,19 +625,108 @@ __global__ void Conv_25600x32x32_SiLU(const T * input, const T * weight, \
 }
 
 template<typename T>
-void C3(const T * input, const T * weights, const T * biases, T * D, T * buffer){
-	cudaStream_t s1, s2, s3, s4;
+__global__ void concat_25600x16_25600x16_25600x32(const T * input1, const T * input2, T * D){
+	// grid(800, 1) block(32, 1) for 16
+
+
+	__shared__ T cache[2][48];
+
+	// region upper bound for block
+	unsigned int start_row = (blockIdx.x << 5);
+
+
+#pragma unroll
+	for(int i = 0; i < 16; i++){
+		cache[0][threadIdx.x] = input1[(start_row << 4) + (i << 5) + threadIdx.x];
+		cache[1][threadIdx.x] = input2[(start_row << 4) + (i << 5) + threadIdx.x];
+
+		__syncthreads();
+		D[(start_row << 5) + (i << 6) + threadIdx.x] = cache[threadIdx.x >> 4][(threadIdx.x) & 15U];
+		D[(start_row << 5) + (i << 6) + threadIdx.x + 32] = cache[threadIdx.x >> 4][(threadIdx.x & 15U) + 16];
+	
+		__syncthreads();
+	}
+	
+}
+
+
+template<typename T>
+void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T * buffer1, T * buffer2, T * buffer3,  T * reshaped_mat, T * reshaped_weight, T * out_img){
+	cudaStream_t s1, s2, s3, s4, s5, s6;
 	cudaStreamCreateWithFlags(&s1, cudaStreamNonBlocking);
 	cudaStreamCreateWithFlags(&s2, cudaStreamNonBlocking);
 	cudaStreamCreateWithFlags(&s3, cudaStreamNonBlocking);
 	cudaStreamCreateWithFlags(&s4, cudaStreamNonBlocking);
+	cudaStreamCreateWithFlags(&s5, cudaStreamNonBlocking);
+	cudaStreamCreateWithFlags(&s6, cudaStreamNonBlocking);
 
-	cudaEvent_t e1, e2, e3, e4;
+	cudaEvent_t e1, e2, e3, e4, e5, e6;
 	cudaEventCreateWithFlags(&e1, cudaEventDisableTiming);
 	cudaEventCreateWithFlags(&e2, cudaEventDisableTiming);
 	cudaEventCreateWithFlags(&e3, cudaEventDisableTiming);
 	cudaEventCreateWithFlags(&e4, cudaEventDisableTiming);
+	cudaEventCreateWithFlags(&e5, cudaEventDisableTiming);
+	cudaEventCreateWithFlags(&e6, cudaEventDisableTiming);
 
+	dim3 blocksize_im2col(32, 32);	
+	dim3 gridsize_im2col(1600, 1);	
+	im2col_32x160x160_25600x32_transpose<float>
+					    <<<gridsize_im2col, blocksize_im2col, 0, s1>>>
+					    (img, input);
+
+	
+	dim3 blocksize_wreshape(16, 16);	
+	dim3 gridsize_wreshape(9, 1);	
+	Convm1_weight_reshape_16x16x3x3_144x16<float>
+					    <<<gridsize_wreshape, blocksize_wreshape, 0, s2>>>
+					    ((float *)(biases + CONV_WEIGHT_m1_OFFSET),
+					     reshaped_weight);
+
+
+	CHECK_CUDA_ERROR(cudaEventRecord(e1, s1));
+	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e1, 0));
+	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s4, e1, 0));
+
+	/* dim3 blocksize_conv1(16, 16);
+	dim3 gridsize_conv1(1, 1600);
+	Conv_25600x16x32_SiLU<float><<<gridsize_conv1, blocksize_conv1, 0, s3>>>
+					(input, 
+					 (float *)(weights + CONV_WEIGHT_1_OFFSET),
+					 (float *)(biases + CONV_BIAS_1_OFFSET),
+					 D); */
+
+	
+	/* dim3 blocksize_fused(16, 16);
+        dim3 gridsize_fused(1, 800);
+	fused_25600x16x32_25600x16x16_SiLU_adding<float>
+						 <<<blocksize_fused, gridsize_fused, 0, s3>>>
+						 (D,) */
+
+
+
+
+	dim3 blocksize_conv2(16, 16);
+        dim3 gridsize_conv2(1, 1600);
+        Conv_25600x16x32_SiLU<float><<<gridsize_conv2, blocksize_conv2, 0, s4>>>
+                                        (input,
+                                         (float *)(weights + CONV_WEIGHT_2_OFFSET),
+                                         (float *)(biases + CONV_BIAS_2_OFFSET),
+                                         buffer1);
+
+
+	dim3 blocksize_ireshape(32, 8);
+        dim3 gridsize_ireshape(160, 1);
+	Convm1_input_reshape_25600x16_25600x144<float>
+					       <<<gridsize_ireshape, blocksize_ireshape, 0, s3>>>
+					       (buffer1,
+						reshaped_mat);
+	CHECK_CUDA_ERROR(cudaEventRecord(e2, s2));
+	CHECK_CUDA_ERROR(cudaEventRecord(e3, s3));
+	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s5, e2, 0));
+	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s5, e3, 0));
+
+
+	
 	
 
 }
