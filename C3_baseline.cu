@@ -59,9 +59,9 @@ __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img){
 
 
 template<typename T>
-__global__ void fused_25600x16x32_25600x16x16_SiLU_adding(const T * input, const T * \
+__global__ void fused_25600x16x32_25600x16x16_SiLU(const T * input, const T * \
                 Conv1_weight, const T * Conv1_bias, const T * Convm0_weight,\
-                const T * Convm0_bias, T * D)
+                const T * Convm0_bias, T * D1, T * D2)
 {
 	//
 	// Probably won't need extra global memory
@@ -120,8 +120,8 @@ __global__ void fused_25600x16x32_25600x16x16_SiLU_adding(const T * input, const
 	sum1 = silu<T>(sum1);
 
 	// to global
-	// D1[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x] = sum0;
-	// D1[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x + 256] = sum1;
+	D1[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x] = sum0;
+	D1[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x + 256] = sum1;
 	
 	// to shared
 	A_tile[threadIdx.y][threadIdx.x] = sum0;
@@ -153,14 +153,10 @@ __global__ void fused_25600x16x32_25600x16x16_SiLU_adding(const T * input, const
 	sum0 = silu<T>(sum0);
 	sum1 = silu<T>(sum1);
 
-
-	// Can fewer the access to input?
-	// TODO: store input from shared to register earlier
-
-	D[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x] = sum0 
-		+ input[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x];
-        D[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x + 256] = sum1
-		+ input[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x + 256];
+	D2[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x] = sum0; 
+		// + input[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x];
+        D2[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x + 256] = sum1;
+		// + input[(tile_start_pos >> 1) + (threadIdx.y << 4) + threadIdx.x + 256];
 
 	return;
 }
@@ -210,8 +206,8 @@ __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
 
 
 template<typename T>
-__global__ void Convm1_25600x144x16_SiLU(const T * input, const T * weight, \
-                const T * bias, T * D)
+__global__ void Convm1_25600x144x16_SiLU_adding(const T * input, const T * weight, \
+                const T * bias, T * to_add, T * D)
 {
 	// tile (32, 16)
 	// grid(800, 1) block(16, 16) split_k 9
@@ -260,6 +256,11 @@ __global__ void Convm1_25600x144x16_SiLU(const T * input, const T * weight, \
 
 	sum0 = silu<T>(sum0);
 	sum1 = silu<T>(sum1);
+
+	if(to_add){
+		sum0 += to_add[(((blockIdx.x << 5) + threadIdx.y) << 4) + threadIdx.x];
+		sum1 += to_add[(((blockIdx.x << 5) + threadIdx.y + 16U) << 4) + threadIdx.x];
+	}
 
 	D[(((blockIdx.x << 5) + threadIdx.y) << 4) + threadIdx.x] = sum0;
 	D[(((blockIdx.x << 5) + threadIdx.y + 16U) << 4) + threadIdx.x] = sum1;
@@ -681,7 +682,7 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 	dim3 gridsize_wreshape(9, 1);	
 	Convm1_weight_reshape_16x16x3x3_144x16<float>
 					    <<<gridsize_wreshape, blocksize_wreshape, 0, s2>>>
-					    ((float *)(biases + CONV_WEIGHT_m1_OFFSET),
+					    ((float *)(weights + CONV_WEIGHT_m1_OFFSET),
 					     reshaped_weight);
 
 
@@ -694,13 +695,14 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 	dim3 blocksize_fused(16, 16);
         dim3 gridsize_fused(1, 800);
-	fused_25600x16x32_25600x16x16_SiLU_adding<float>
+	fused_25600x16x32_25600x16x16_SiLU<float>
 						 <<<gridsize_fused, blocksize_fused, 0, s3>>>
 						 ( input,
 						  (float *)(weights + CONV_WEIGHT_1_OFFSET),
 						  (float *)(biases + CONV_BIAS_1_OFFSET),
 						  (float *)(weights + CONV_WEIGHT_m0_OFFSET),
 						  (float *)(biases + CONV_BIAS_m0_OFFSET),
+						  buffer3,
 						  buffer1
 						  );
 
@@ -739,10 +741,11 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 	dim3 blocksize_convm1(16, 16);
         dim3 gridsize_convm1(800, 1);
-	Convm1_25600x144x16_SiLU<float><<<gridsize_convm1, blocksize_convm1, 0, s5>>>
+	Convm1_25600x144x16_SiLU_adding<float><<<gridsize_convm1, blocksize_convm1, 0, s5>>>
 				       (reshaped_mat,
 					reshaped_weight,
 					(float*)(biases + CONV_BIAS_m1_OFFSET),
+					buffer3,
 					buffer1);
 	
 	CHECK_LAST_CUDA_ERROR();
@@ -753,12 +756,12 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s6, e5, 0));
 
 
-	dim3 blocksize_cct(16, 16);
+	dim3 blocksize_cct(32, 1);
         dim3 gridsize_cct(800, 1);
 	concat_25600x16_25600x16_25600x32<float>
 					 <<<gridsize_cct, blocksize_cct, 0, s6>>>
-					 (buffer1,
-					  buffer2,
+					 (buffer2,
+					  buffer1,
 					  buffer3
 					  );
 
@@ -813,7 +816,7 @@ int main(int arg, char ** args){
 		}
 	
 	}
-
+	if(C3_test){
 	float * img, * weights, * biases, * buffer1, *buffer2, * buffer3, * reshaped_mat, * reshaped_bias, * out_img;
 	CHECK_CUDA_ERROR(cudaHostAlloc((void**)&img, INPUT_SIZE * sizeof(float), cudaHostAllocDefault));
 	// CHECK_CUDA_ERROR(cudaHostAlloc((void**)&input, INPUT_SIZE * sizeof(float), cudaHostAllocDefault));
@@ -948,7 +951,6 @@ int main(int arg, char ** args){
 	free(temp_input_2);
 
 	// TODO: finish C3 Test
-        // TODO: There are unsolved illegal mem accesses in Part_1 C3i
 	cudaEvent_t C3_start, C3_stop;
 	float C3_runtime;
 	CHECK_CUDA_ERROR(cudaEventCreate(&C3_start));
@@ -972,7 +974,8 @@ int main(int arg, char ** args){
 	CHECK_CUDA_ERROR(cudaMemcpy(out_img, d_out_img, OUTPUT_SIZE * sizeof(float), cudaMemcpyDeviceToHost));
 
 	for(int i = 0; i < 32; i++){
-		for(int j = 0; j < 25600; j ++){
+		std::cout << "Channel " << i << " first 5 elements: ";
+		for(int j = 0; j < 5; j ++){
 			std::cout << out_img[i * 25600 + j] << " ";
 		}
 		std::cout << std::endl;
@@ -1003,7 +1006,7 @@ int main(int arg, char ** args){
         // free(input); free(weights); free(biases); free(output); free(buffer);
 
         CHECK_CUDA_ERROR(cudaDeviceReset());
-        
+        } 
 
 	if(arg > 2){
         
@@ -1281,7 +1284,7 @@ int main(int arg, char ** args){
 
 
 
-                // CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_1, 100U * sizeof(float) << 12, cudaHostAllocDefault));
+                CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_1, 100U * sizeof(float) << 12, cudaHostAllocDefault));
                 CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_2, 100U * sizeof(float) << 12, cudaHostAllocDefault));
                 t_gt_1 = (float *)malloc(100U * sizeof(float) << 12);
                 t_gt_2 = (float *)malloc(100U * sizeof(float) << 12);
@@ -1317,7 +1320,7 @@ int main(int arg, char ** args){
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_1, 100U * sizeof(float) << 13));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_1, sizeof(float) << 9));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_1, sizeof(float) << 4));
-                // CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_1, 100U * sizeof(float) << 12));
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_1, 100U * sizeof(float) << 12));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_2, sizeof(float) << 8));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_2, sizeof(float) << 4));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_2, 100U * sizeof(float) << 12));
@@ -1332,7 +1335,7 @@ int main(int arg, char ** args){
                                         sizeof(float) << 8,  cudaMemcpyHostToDevice));
                 CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_2, t_bias_2, \
                                         sizeof(float) << 4, cudaMemcpyHostToDevice));
-                // CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 12));
+                CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_1, 0, 100U * sizeof(float) << 12));
                 CHECK_CUDA_ERROR(cudaMemset((void*)d_t_output_2, 0, 100U * sizeof(float) << 12));
 		
 
@@ -1340,35 +1343,38 @@ int main(int arg, char ** args){
 		dim3 block_size_3(16, 16);	
 
 		
-		fused_25600x16x32_25600x16x16_SiLU_adding<float>
+		fused_25600x16x32_25600x16x16_SiLU<float>
                         <<<grid_size_3, block_size_3>>>
                         (d_t_input_1,
                         d_t_weight_1,
                         d_t_bias_1,
                         d_t_weight_2,
                         d_t_bias_2,
+			d_t_output_1,
                         d_t_output_2
                         );
 
-		fused_25600x16x32_25600x16x16_SiLU_adding<float>
+		fused_25600x16x32_25600x16x16_SiLU<float>
                         <<<grid_size_3, block_size_3>>>
                         (d_t_input_1,
                         d_t_weight_1,
                         d_t_bias_1,
                         d_t_weight_2,
                         d_t_bias_2,
+			d_t_output_1,
                         d_t_output_2
                         );
 
 		// Timed run
                 cudaEventRecord(start);
-		fused_25600x16x32_25600x16x16_SiLU_adding<float>
+		fused_25600x16x32_25600x16x16_SiLU<float>
                         <<<grid_size_3, block_size_3>>>
                         (d_t_input_1,
                         d_t_weight_1,
                         d_t_bias_1,
 			d_t_weight_2,
 			d_t_bias_2,
+			d_t_output_1,
                         d_t_output_2
                         );	
 
@@ -1383,13 +1389,13 @@ int main(int arg, char ** args){
 		CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 25600, 16, 32);	
 		CPU_Conv_MxNxK_SiLU(t_gt_1, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 16);	
 		
-		for(int i = 0; i < 25600; i++){
+		/* for(int i = 0; i < 25600; i++){
 			for(int j = 0; j < 16; j++){
 				t_gt_2[(i << 4) + j] += t_input_1[(i << 4) + j];
 			}
-		}
+		} */
 
-		// CHECK_CUDA_ERROR(cudaMemcpy(t_output_1, d_t_output_1, 100U * \
+		CHECK_CUDA_ERROR(cudaMemcpy(t_output_1, d_t_output_1, 100U * \
                                         sizeof(float) << 12, cudaMemcpyDeviceToHost));
 
 		CHECK_CUDA_ERROR(cudaMemcpy(t_output_2, d_t_output_2, 100U * \
@@ -1398,20 +1404,20 @@ int main(int arg, char ** args){
 
 		bool flag3 = true;
                 int false_num = 0;
-                /* for(int i = 0; i < 25600; i++){
+                for(int i = 0; i < 25600; i++){
                         for(int j = 0; j < 16; j++){
-                                if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
+                                /*if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
                                         std::cout << t_gt_2[i * 16 + j] << " " << t_output_2[i * 16 + j] << std::endl;
-                                } 
+                                } */
                                 if(abs(t_gt_1[i * 16 + j] - t_output_1[i * 16 + j]) > 0.0001f){
                                         flag3 = false;
                                         false_num++;
                                 }
-				else{
+				/*else{
                                         std::cout << i << " " << j << std::endl;
-                                }
+                                }*/
                         }
-                } */
+                }
 
 		for(int i = 0; i < 25600; i++){
                         for(int j = 0; j < 16; j++){
@@ -1422,14 +1428,14 @@ int main(int arg, char ** args){
                                         flag3 = false;
                                         false_num++;
                                 }
-				/* else{
+				/*else{
 					std::cout << i << " " << j << std::endl;
-				} */
+				}*/
                         }
                 }
 
                 std::cout << "Test 3 passed?: " << flag3 << std::endl;
-                std::cout << "Mistake on "<< false_num << " elements out of 409600" << std::endl;
+                std::cout << "Mistake on "<< false_num << " elements out of 409600 * 2" << std::endl;
                 std::cout << "Test 3 runtime: " << runtime * 1000 << " us" << std::endl;
 
 		CHECK_CUDA_ERROR(cudaFreeHost(t_input_1));
@@ -1437,7 +1443,7 @@ int main(int arg, char ** args){
                 CHECK_CUDA_ERROR(cudaFreeHost(t_weight_2));
                 CHECK_CUDA_ERROR(cudaFreeHost(t_bias_1));
                 CHECK_CUDA_ERROR(cudaFreeHost(t_bias_2));
-                // CHECK_CUDA_ERROR(cudaFreeHost(t_output_1));
+                CHECK_CUDA_ERROR(cudaFreeHost(t_output_1));
                 CHECK_CUDA_ERROR(cudaFreeHost(t_output_2));
 
                 CHECK_CUDA_ERROR(cudaFree(d_t_input_1));
@@ -1445,7 +1451,7 @@ int main(int arg, char ** args){
                 CHECK_CUDA_ERROR(cudaFree(d_t_weight_2));
                 CHECK_CUDA_ERROR(cudaFree(d_t_bias_1));
                 CHECK_CUDA_ERROR(cudaFree(d_t_bias_2));
-                // CHECK_CUDA_ERROR(cudaFree(d_t_output_1));
+                CHECK_CUDA_ERROR(cudaFree(d_t_output_1));
                 CHECK_CUDA_ERROR(cudaFree(d_t_output_2));
 
                 free(t_gt_1);
@@ -1548,9 +1554,9 @@ int main(int arg, char ** args){
 		CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e1, 0));
 
 
-		Convm1_25600x144x16_SiLU<float>
+		Convm1_25600x144x16_SiLU_adding<float>
 					<<<grid_size_2, block_size_2>>>
-					(reshaped_input, reshaped_weight, d_t_bias_1, d_t_output_1);
+					(reshaped_input, reshaped_weight, d_t_bias_1, nullptr, d_t_output_1);
                 CHECK_LAST_CUDA_ERROR();
 
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
@@ -1577,9 +1583,9 @@ int main(int arg, char ** args){
 		CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e2, 0));
                 CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e1, 0));
                 
-		Convm1_25600x144x16_SiLU<float>
+		Convm1_25600x144x16_SiLU_adding<float>
                                         <<<grid_size_2, block_size_2>>>
-                                        (reshaped_input, reshaped_weight, d_t_bias_1, d_t_output_1);
+                                        (reshaped_input, reshaped_weight, d_t_bias_1, nullptr, d_t_output_1);
                 CHECK_LAST_CUDA_ERROR();
 		
 		CHECK_CUDA_ERROR(cudaEventRecord(stop, s3));

@@ -75,17 +75,17 @@ void check_last(const char* const file, const int line)
 }
 
 template<typename T>
-__global__ void fused_25600x16x32_25600x16x16_SiLU_adding(const T * input, const T * \
+__global__ void fused_25600x16x32_25600x16x16_SiLU(const T * input, const T * \
 		Conv1_weight, const T * Conv1_bias, const T * Convm0_weight,\
-	       	const T * Convm0_bias, T * D);
+	       	const T * Convm0_bias, T * D1, T * D2);
 
 template<typename T>
 __global__ void Convm1_trivial(const T * input, const T * weight, const T * \
 		bias, T * D, unsigned int offset);
 
 template<typename T>
-__global__ void Convm1_25600x144x16_SiLU(const T * input, const T * weight, \
-		const T * bias, T * D);
+__global__ void Convm1_25600x144x16_SiLU_adding(const T * input, const T * weight, \
+		const T * bias, T * to_add, T * D);
 
 // template<typename T>
 // __global__ void fused_3200x16x16_3200x16x16_SiLU();
