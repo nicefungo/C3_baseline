@@ -693,6 +693,7 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s3, e1, 0));
 	CHECK_CUDA_ERROR(cudaStreamWaitEvent(s4, e1, 0));
 
+
 	dim3 blocksize_fused(16, 16);
         dim3 gridsize_fused(1, 800);
 	fused_25600x16x32_25600x16x16_SiLU<float>
@@ -708,14 +709,14 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 
 	CHECK_LAST_CUDA_ERROR();
-
+	
 	dim3 blocksize_conv2(16, 16);
         dim3 gridsize_conv2(1, 1600);
         Conv_25600x16x32_SiLU<float><<<gridsize_conv2, blocksize_conv2, 0, s4>>>
                                         ( input,
                                          (float *)(weights + CONV_WEIGHT_2_OFFSET),
                                          (float *)(biases + CONV_BIAS_2_OFFSET),
-                                         buffer2);
+					 buffer2);
 
 
 	CHECK_LAST_CUDA_ERROR();
@@ -760,13 +761,14 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
         dim3 gridsize_cct(800, 1);
 	concat_25600x16_25600x16_25600x32<float>
 					 <<<gridsize_cct, blocksize_cct, 0, s6>>>
-					 (buffer2,
-					  buffer1,
+					 (buffer1,
+					  buffer2,
 					  buffer3
 					  );
 
 	CHECK_LAST_CUDA_ERROR();
-	
+
+
 	dim3 blocksize_conv3(32, 8);
         dim3 gridsize_conv3(1, 800);
 	Conv_25600x32x32_SiLU<float><<<gridsize_conv3, blocksize_conv3, 0, s6>>>
@@ -805,6 +807,27 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 
 }
+
+
+// ptr in out
+void transpose_weight(float* p, int K, int N) {
+        if (K <= 0 || N <= 0) {
+                return;
+        }
+
+        const size_t rows = static_cast<size_t>(K);
+        const size_t cols = static_cast<size_t>(N);
+        std::vector<float> buffer(rows * cols);
+
+        for (size_t r = 0; r < rows; ++r) {
+                for (size_t c = 0; c < cols; ++c) {
+                        buffer[c * rows + r] = p[r * cols + c];
+                }
+        }
+
+        std::memcpy(p, buffer.data(), buffer.size() * sizeof(float));
+}
+
 
 int main(int arg, char ** args){
 	bool test_flags[5];
@@ -854,9 +877,13 @@ int main(int arg, char ** args){
 	load_npy_into<float>("parameters/m.0.cv2.conv.bias", (float *)(biases + CONV_BIAS_m1_OFFSET), CONV_BIAS_m1_SIZE);
 
 	load_npy_into<float>("parameters/cv1.conv.weight", (float *)(weights + CONV_WEIGHT_1_OFFSET), CONV_WEIGHT_1_SIZE);
+	transpose_weight((float *)(weights + CONV_WEIGHT_1_OFFSET), 32, 16);
 	load_npy_into<float>("parameters/cv2.conv.weight", (float *)(weights + CONV_WEIGHT_2_OFFSET), CONV_WEIGHT_2_SIZE);
+	transpose_weight((float *)(weights + CONV_WEIGHT_2_OFFSET), 32, 16);
 	load_npy_into<float>("parameters/cv3.conv.weight", (float *)(weights + CONV_WEIGHT_3_OFFSET), CONV_WEIGHT_3_SIZE);
+	transpose_weight((float *)(weights + CONV_WEIGHT_3_OFFSET), 32, 32);
 	load_npy_into<float>("parameters/m.0.cv1.conv.weight", (float *)(weights + CONV_WEIGHT_m0_OFFSET), CONV_WEIGHT_m0_SIZE);
+	transpose_weight((float *)(weights + CONV_WEIGHT_m0_OFFSET), 16, 16);
 	load_npy_into<float>("parameters/m.0.cv2.conv.weight", (float *)(weights + CONV_WEIGHT_m1_OFFSET), CONV_WEIGHT_m1_SIZE);
 
 	/* for(int i = 0; i < CONV_WEIGHT_m1_SIZE; i++){
@@ -974,7 +1001,7 @@ int main(int arg, char ** args){
 	CHECK_CUDA_ERROR(cudaMemcpy(out_img, d_out_img, OUTPUT_SIZE * sizeof(float), cudaMemcpyDeviceToHost));
 
 	for(int i = 0; i < 32; i++){
-		std::cout << "Channel " << i << " first 5 elements: ";
+		std::cout << "Channel " << i << " first 5: ";
 		for(int j = 0; j < 5; j ++){
 			std::cout << out_img[i * 25600 + j] << " ";
 		}
