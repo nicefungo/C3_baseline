@@ -29,9 +29,9 @@ __global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D){
 	
 	tile[threadIdx.y][threadIdx.x] = img[col * 25600 + row];
 	
-	__syncthreads();
+	// __syncthreads();
 
-	D[(((blockIdx.x << 5) + threadIdx.y) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+	D[(((blockIdx.x << 5) + threadIdx.x) << 5) + threadIdx.y] = tile[threadIdx.y][threadIdx.x];
 
 
 }
@@ -49,11 +49,30 @@ __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img){
 
 	if(col >= 32 || row >= 25600) return;
 	
-	tile[threadIdx.y][threadIdx.x] = D[(((blockIdx.x << 5) + threadIdx.y) << 5) +threadIdx.x];
+	tile[threadIdx.x][threadIdx.y] = D[(((blockIdx.x << 5) + threadIdx.x) << 5) +threadIdx.y];
 
-	__syncthreads();
+	// __syncthreads();
         
 	img[(col * 25600) + row] = tile[threadIdx.x][threadIdx.y];
+
+}
+
+
+template<typename T>
+__global__ void col2im_25600x16_16x160x160_transpose(const T * D , T * img){
+	// (800 1), (32 16)
+	__shared__ T tile[32][17];
+
+	unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int col = threadIdx.y; // 0:16
+
+        if(col >= 16 || row >= 25600) return;
+
+        tile[threadIdx.x][threadIdx.y] = D[(((blockIdx.x << 5) + threadIdx.x) << 4) +threadIdx.y];
+
+        // __syncthreads();
+
+        img[(col * 25600) + row] = tile[threadIdx.x][threadIdx.y];
 
 }
 
@@ -1221,8 +1240,9 @@ int main(int arg, char ** args){
                                        / static_cast<float>(RAND_MAX);
                 }*/
 
-		float * d_t_img;
+		float * d_t_img, * d_t_img_out;
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_img, 100U * sizeof(float) << 13));
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_img_out, 100U * sizeof(float) << 12));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_2, 100U * sizeof(float) << 13));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_2, sizeof(float) << 9));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_2, sizeof(float) << 4));
@@ -1234,6 +1254,7 @@ int main(int arg, char ** args){
 			
 		dim3 gsz(800, 1);
 		dim3 bsz(32, 32);
+		dim3 bsz2(32, 16);
 		im2col_32x160x160_25600x32_transpose<float>
                                             <<<gsz, bsz>>>
                                             (d_t_img, d_t_input_2);
@@ -1275,8 +1296,14 @@ int main(int arg, char ** args){
 		
 
 		CHECK_LAST_CUDA_ERROR();
+                col2im_25600x16_16x160x160_transpose<float>
+                                            <<<gsz, bsz2>>>
+                                            (d_t_output_2, d_t_img_out);
 
-		CHECK_CUDA_ERROR(cudaMemcpy(t_output_2, d_t_output_2, 100U * \
+        	
+		CHECK_LAST_CUDA_ERROR();
+
+		CHECK_CUDA_ERROR(cudaMemcpy(t_output_2, d_t_img_out, 100U * \
 					sizeof(float) << 12, cudaMemcpyDeviceToHost));
 
 		// CPU_Conv_MxNxK_SiLU(t_input_2, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 32);	
@@ -1286,9 +1313,9 @@ int main(int arg, char ** args){
 		for(int i = 0; i < 16; i++){
 			for(int j = 0; j < 25600; j++){
 				if(i >= 0 && i <= 0 && j >= 0 && j <= 0){
-					std::cout << t_gt_2[i * 25600 + j] << " " << t_output_2[j * 16 + i] << std::endl;
+					std::cout << t_gt_2[i * 25600 + j] << " " << t_output_2[i * 25600 + j] << std::endl;
 				}
-				if(abs(t_gt_2[i * 25600 + j] - t_output_2[j * 16 + i]) > 0.0001f){
+				if(abs(t_gt_2[i * 25600 + j] - t_output_2[i * 25600 + j]) > 0.0001f){
 					flag2 = false;
 					false_num++;
 				}
@@ -1305,6 +1332,7 @@ int main(int arg, char ** args){
 
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_input_2));	
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_img));	
+	       	CHECK_CUDA_ERROR(cudaFree(d_t_img_out));	
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_weight_2));	
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_bias_2));	
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_output_2));

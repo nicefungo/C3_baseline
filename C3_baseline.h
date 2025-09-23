@@ -109,6 +109,9 @@ template<typename T>
 __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img);
 
 template<typename T>
+__global__ void col2im_25600x16_16x160x160_transpose(const T * D , T * img);
+
+template<typename T>
 __global__ void Convm1_weight_reshape_16x16x3x3_144x16(const T * weight , T * D);
 
 template<typename T>
