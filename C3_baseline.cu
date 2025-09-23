@@ -1079,6 +1079,8 @@ int main(int arg, char ** args){
 		t_gt_1 = (float *)malloc(100U * sizeof(float) << 13);
 		memset((void*) t_gt_1, 0, 100U * sizeof(float) << 13);
 
+
+
 		for(int i = 0; i < 819200; i++){
 			t_input_1[i] = static_cast<float>(rand()) \
 				       / static_cast<float>(RAND_MAX) - 0.5f;
@@ -1181,7 +1183,7 @@ int main(int arg, char ** args){
 	if(test_flags[1]){
 		// Test for Conv 25600 * 16 * 32 with Gelu activation
 		std::cout << "-----------------------------------------------" << std::endl;
-		std::cout << "Unit Test 2 on Conv1 begins." << std::endl;
+		std::cout << "Unit Test 2 on Conv2 begins." << std::endl;
 		std::cout << "-----------------------------------------------"
 			  << std::endl;
 
@@ -1196,7 +1198,15 @@ int main(int arg, char ** args){
 		t_gt_2 = (float *)malloc(100U * sizeof(float) << 12);
 		memset((void*) t_gt_2, 0, 100U * sizeof(float) << 12);
 
-		for(int i = 0; i < 819200; i++){
+
+		
+		load_input_into("data/inputs/input_cv2_0.txt", t_input_2, 819200);
+		load_input_into("data/outputs/output_cv2_0.txt", t_gt_2, 409600);
+		load_npy_into("parameters/cv2.conv.weight", t_weight_2, 512);
+		load_npy_into("parameters/cv2.conv.bias", t_bias_2, 16);
+		transpose_weight(t_weight_2, 32, 16);
+		
+		/* for(int i = 0; i < 819200; i++){
 			t_input_2[i] = static_cast<float>(rand()) \
 				       / static_cast<float>(RAND_MAX) - 0.5f;
 		}
@@ -1209,15 +1219,27 @@ int main(int arg, char ** args){
 		for(int i = 0; i < 16; i++){
                         t_bias_2[i] = static_cast<float>(rand()) \
                                        / static_cast<float>(RAND_MAX);
-                }
+                }*/
 
+		float * d_t_img;
+                CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_img, 100U * sizeof(float) << 13));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_2, 100U * sizeof(float) << 13));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_2, sizeof(float) << 9));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_2, sizeof(float) << 4));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_2, 100U * sizeof(float) << 12));
 			
-		CHECK_CUDA_ERROR(cudaMemcpy(d_t_input_2, t_input_2, 100U * \ 
+		CHECK_CUDA_ERROR(cudaMemcpy(d_t_img, t_input_2, 100U * \ 
 					sizeof(float) << 13, cudaMemcpyHostToDevice));
+		
+			
+		dim3 gsz(800, 1);
+		dim3 bsz(32, 32);
+		im2col_32x160x160_25600x32_transpose<float>
+                                            <<<gsz, bsz>>>
+                                            (d_t_img, d_t_input_2);
+		
+		
+		
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_weight_2, t_weight_2, \
 					sizeof(float) << 9,  cudaMemcpyHostToDevice));
 		CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_2, t_bias_2, \ 
@@ -1257,16 +1279,16 @@ int main(int arg, char ** args){
 		CHECK_CUDA_ERROR(cudaMemcpy(t_output_2, d_t_output_2, 100U * \
 					sizeof(float) << 12, cudaMemcpyDeviceToHost));
 
-		CPU_Conv_MxNxK_SiLU(t_input_2, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 32);	
+		// CPU_Conv_MxNxK_SiLU(t_input_2, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 32);	
 
 		bool flag2 = true;
 		int false_num = 0;
-		for(int i = 0; i < 25600; i++){
-			for(int j = 0; j < 16; j++){
-				/* if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
-					std::cout << t_gt_2[i * 16 + j] << " " << t_output_2[i * 16 + j] << std::endl;
-				} */
-				if(abs(t_gt_2[i * 16 + j] - t_output_2[i * 16 + j]) > 0.0001f){
+		for(int i = 0; i < 16; i++){
+			for(int j = 0; j < 25600; j++){
+				if(i >= 0 && i <= 0 && j >= 0 && j <= 0){
+					std::cout << t_gt_2[i * 25600 + j] << " " << t_output_2[j * 16 + i] << std::endl;
+				}
+				if(abs(t_gt_2[i * 25600 + j] - t_output_2[j * 16 + i]) > 0.0001f){
 					flag2 = false;
 					false_num++;
 				}
@@ -1282,6 +1304,7 @@ int main(int arg, char ** args){
 	       	CHECK_CUDA_ERROR(cudaFreeHost(t_output_2));
 
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_input_2));	
+	       	CHECK_CUDA_ERROR(cudaFree(d_t_img));	
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_weight_2));	
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_bias_2));	
 	       	CHECK_CUDA_ERROR(cudaFree(d_t_output_2));
@@ -1315,9 +1338,23 @@ int main(int arg, char ** args){
                 CHECK_CUDA_ERROR(cudaHostAlloc((void**)&t_output_2, 100U * sizeof(float) << 12, cudaHostAllocDefault));
                 t_gt_1 = (float *)malloc(100U * sizeof(float) << 12);
                 t_gt_2 = (float *)malloc(100U * sizeof(float) << 12);
-                memset((void*) t_gt_1, 0, 100U * sizeof(float) << 12);
-                memset((void*) t_gt_2, 0, 100U * sizeof(float) << 12);
+                // memset((void*) t_gt_1, 0, 100U * sizeof(float) << 12);
+                // memset((void*) t_gt_2, 0, 100U * sizeof(float) << 12);
 		
+		
+		load_input_into<float>("data/outputs/output0_fused_0.txt", t_gt_1, 409600);
+		load_input_into<float>("data/outputs/output1_fused_0.txt", t_gt_2, 409600);
+
+		load_input_into<float>("data/inputs/input_fused_0.txt", t_input_1, 819200);
+
+        	load_npy_into<float>("parameters/cv1.conv.weight", t_weight_1, CONV_WEIGHT_1_SIZE);
+        	transpose_weight(t_weight_1, 32, 16);
+		load_npy_into<float>("parameters/m.0.cv1.conv.weight", t_weight_2, CONV_WEIGHT_m0_SIZE);
+        	transpose_weight(t_weight_2, 16, 16);
+        	load_npy_into<float>("parameters/cv1.conv.bias", t_bias_1, CONV_BIAS_1_SIZE);
+        	load_npy_into<float>("parameters/m.0.cv1.conv.bias", t_bias_2, CONV_BIAS_m0_SIZE);
+
+		/*	
 		for(int i = 0; i < 819200; i++){
                         t_input_1[i] = static_cast<float>(rand()) \
                                        / static_cast<float>(RAND_MAX) - 0.5f;
@@ -1342,8 +1379,10 @@ int main(int arg, char ** args){
                         t_bias_2[i] = static_cast<float>(rand()) \
                                        / static_cast<float>(RAND_MAX);
                 }
+		*/
 
-
+		float * d_t_img;
+		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_img, 100U * sizeof(float) << 13));
 		CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_input_1, 100U * sizeof(float) << 13));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_weight_1, sizeof(float) << 9));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_1, sizeof(float) << 4));
@@ -1352,8 +1391,16 @@ int main(int arg, char ** args){
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_bias_2, sizeof(float) << 4));
                 CHECK_CUDA_ERROR(cudaMalloc((void**)&d_t_output_2, 100U * sizeof(float) << 12));
 
-		CHECK_CUDA_ERROR(cudaMemcpy(d_t_input_1, t_input_1, 100U * \
+		CHECK_CUDA_ERROR(cudaMemcpy(d_t_img, t_input_1, 100U * \
                                         sizeof(float) << 13, cudaMemcpyHostToDevice));
+
+		dim3 gsz(800, 1);
+		dim3 bsz(32, 32);
+		im2col_32x160x160_25600x32_transpose<float>
+                                            <<<gsz, bsz>>>
+                                            (d_t_img, d_t_input_1);
+
+
                 CHECK_CUDA_ERROR(cudaMemcpy(d_t_weight_1, t_weight_1, \
                                         sizeof(float) << 9,  cudaMemcpyHostToDevice));
                 CHECK_CUDA_ERROR(cudaMemcpy(d_t_bias_1, t_bias_1, \
@@ -1413,8 +1460,8 @@ int main(int arg, char ** args){
 		
 
 
-		CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 25600, 16, 32);	
-		CPU_Conv_MxNxK_SiLU(t_gt_1, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 16);	
+		// CPU_Conv_MxNxK_SiLU(t_input_1, t_weight_1, t_bias_1, t_gt_1, 25600, 16, 32);	
+		// CPU_Conv_MxNxK_SiLU(t_gt_1, t_weight_2, t_bias_2, t_gt_2, 25600, 16, 16);	
 		
 		/* for(int i = 0; i < 25600; i++){
 			for(int j = 0; j < 16; j++){
@@ -1431,12 +1478,12 @@ int main(int arg, char ** args){
 
 		bool flag3 = true;
                 int false_num = 0;
-                for(int i = 0; i < 25600; i++){
-                        for(int j = 0; j < 16; j++){
-                                /*if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
-                                        std::cout << t_gt_2[i * 16 + j] << " " << t_output_2[i * 16 + j] << std::endl;
-                                } */
-                                if(abs(t_gt_1[i * 16 + j] - t_output_1[i * 16 + j]) > 0.0001f){
+                for(int i = 0; i < 16; i++){
+                        for(int j = 0; j < 25600; j++){
+                                if(i >= 0 && i <= 0 && j >= 0 && j <= 0){
+                                        std::cout << t_gt_1[i * 25600 + j] << " " << t_output_1[j * 16 + i] << std::endl;
+                                }
+                                if(abs(t_gt_1[i * 25600 + j] - t_output_1[j * 16 + i]) > 0.0001f){
                                         flag3 = false;
                                         false_num++;
                                 }
@@ -1445,13 +1492,15 @@ int main(int arg, char ** args){
                                 }*/
                         }
                 }
+		
+		std::cout << std::endl;
 
-		for(int i = 0; i < 25600; i++){
-                        for(int j = 0; j < 16; j++){
-                                /*if(i >= 0 && i <= 3 && j >= 0 && j <= 3){
-                                        std::cout << t_gt_2[i * 16 + j] << " " << t_output_2[i * 16 + j] << std::endl;
-                                }*/
-                                if(abs(t_gt_2[i * 16 + j] - t_output_2[i * 16 + j]) > 0.0001f){
+		for(int i = 0; i < 16; i++){
+                        for(int j = 0; j < 25600; j++){
+                                if(i >= 0 && i <= 0 && j >= 0 && j <= 0){
+                                        std::cout << t_gt_2[i * 25600 + j] << " " << t_output_2[j * 16 + i] << std::endl;
+                                }
+                                if(abs(t_gt_2[i * 25600 + j] - t_output_2[j * 16 + i]) > 0.0001f){
                                         flag3 = false;
                                         false_num++;
                                 }
@@ -1473,6 +1522,7 @@ int main(int arg, char ** args){
                 CHECK_CUDA_ERROR(cudaFreeHost(t_output_1));
                 CHECK_CUDA_ERROR(cudaFreeHost(t_output_2));
 
+                CHECK_CUDA_ERROR(cudaFree(d_t_img));
                 CHECK_CUDA_ERROR(cudaFree(d_t_input_1));
                 CHECK_CUDA_ERROR(cudaFree(d_t_weight_1));
                 CHECK_CUDA_ERROR(cudaFree(d_t_weight_2));
