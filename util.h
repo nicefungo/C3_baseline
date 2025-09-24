@@ -45,6 +45,7 @@ inline __host__ __device__ __half silu<__half>(const __half x) {
     return __float2half(result_float);
 }
 
+// FIXED FOR BASELINE
 template <class T>
 void load_npy_into(const std::string& path, T* dst, size_t expected_count) {
     cnpy::NpyArray arr = cnpy::npy_load(path);
@@ -62,6 +63,8 @@ void load_npy_into(const std::string& path, T* dst, size_t expected_count) {
     std::memcpy(dst, arr.data<T>(), count * sizeof(T));
 }
 
+
+// FIXED FOR BASELINE
 template <class T>
 void load_input_into(const std::string& path, T * dst, size_t expected_count){
 	std::ifstream in(path);
