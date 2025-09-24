@@ -914,10 +914,10 @@ int main(int arg, char ** args){
 	}
 	std::cout << std::endl; */
 
-	// loading input
-	
-
+	// loading input and groundtruth
+	float * gt = (float *)malloc(OUTPUT_SIZE * sizeof(float));
 	load_input_into<float>("data/inputs/input_0.txt", img, INPUT_SIZE);
+	load_input_into<float>("data/outputs/output_0.txt", gt, OUTPUT_SIZE);
 	/* for(int i = 0; i < 16; i++){
 		for(int j = 0; j < 16; j++){
 			std::cout << input[i * 25600 + j] << " ";
@@ -1010,27 +1010,33 @@ int main(int arg, char ** args){
         
 	C3<float>(d_img, d_input, d_weights, d_biases, d_output, d_buffer1, d_buffer2, d_buffer3, d_reshaped_mat, d_reshaped_weight, d_out_img);
 
-        CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+        // CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 	CHECK_CUDA_ERROR(cudaEventRecord(C3_stop, 0));
 	CHECK_CUDA_ERROR(cudaEventSynchronize(C3_stop));
 	CHECK_CUDA_ERROR(cudaEventElapsedTime(&C3_runtime, C3_start, C3_stop));
 	
-	std::cout << "C3 runtime: " << C3_runtime << " ms" << std::endl;
 
 	CHECK_LAST_CUDA_ERROR();
 
         // CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
+	
 	CHECK_CUDA_ERROR(cudaMemcpy(out_img, d_out_img, OUTPUT_SIZE * sizeof(float), cudaMemcpyDeviceToHost));
 
-	for(int i = 0; i < 32; i++){
-		std::cout << "Channel " << i << " first 5: ";
-		for(int j = 0; j < 5; j ++){
-			std::cout << out_img[i * 25600 + j] << " ";
+	bool pass = true;
+	int miss_num = 0;
+	for(int i = 0; i < 32 * 25600; i++){
+		if(abs(out_img[i] - gt[i]) > 0.0001f){
+			pass = false;
+			miss_num++;
 		}
-		std::cout << std::endl;
 	}
-	std::cout << std::endl;
+
+	std::cout << "Integrated C3 test passed?: " << pass << std::endl;
+        std::cout << "Mistake on "<< miss_num << " elements out of 819200" << std::endl;
+	std::cout << "C3 runtime: " << C3_runtime << " ms" << std::endl;
+
+	// std::cout << std::endl;
 
 
         CHECK_CUDA_ERROR(cudaFree(d_input));
