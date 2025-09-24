@@ -6,7 +6,7 @@ void TODO(){
 	std::exit(EXIT_FAILURE);
 }
 
-
+// FIXED FOR BASELINE
 template<typename T>
 __global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D){
 	
@@ -58,6 +58,7 @@ __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img){
 }
 
 
+// FIXED FOR BASELINE
 template<typename T>
 __global__ void col2im_25600x16_16x160x160_transpose(const T * D , T * img){
 	// (800 1), (32 16)
@@ -77,6 +78,7 @@ __global__ void col2im_25600x16_16x160x160_transpose(const T * D , T * img){
 }
 
 
+// FIXED FOR BASELINE
 template<typename T>
 __global__ void fused_25600x16x32_25600x16x16_SiLU(const T * input, const T * \
                 Conv1_weight, const T * Conv1_bias, const T * Convm0_weight,\
@@ -424,6 +426,7 @@ void CPU_Conv_MxNxK_SiLU(const T * input, const T * weight, const T * bias, \
 }
 
 
+// FIXED FOR BASELINE
 template<typename T>
 __global__ void Conv_25600x16x32_SiLU(const T * input, const T * weight, \
                 const T * bias, T * D)
@@ -828,6 +831,7 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 }
 
 
+// FIXED FOR BASELINE
 // ptr in out
 void transpose_weight(float* p, int K, int N) {
         if (K <= 0 || N <= 0) {
@@ -896,9 +900,9 @@ int main(int arg, char ** args){
 	load_npy_into<float>("parameters/m.0.cv2.conv.bias", (float *)(biases + CONV_BIAS_m1_OFFSET), CONV_BIAS_m1_SIZE);
 
 	load_npy_into<float>("parameters/cv1.conv.weight", (float *)(weights + CONV_WEIGHT_1_OFFSET), CONV_WEIGHT_1_SIZE);
-	transpose_weight((float *)(weights + CONV_WEIGHT_1_OFFSET), 32, 16);
+	transpose_weight((float *)(weights + CONV_WEIGHT_1_OFFSET), 16, 32);
 	load_npy_into<float>("parameters/cv2.conv.weight", (float *)(weights + CONV_WEIGHT_2_OFFSET), CONV_WEIGHT_2_SIZE);
-	transpose_weight((float *)(weights + CONV_WEIGHT_2_OFFSET), 32, 16);
+	transpose_weight((float *)(weights + CONV_WEIGHT_2_OFFSET), 16, 32);
 	load_npy_into<float>("parameters/cv3.conv.weight", (float *)(weights + CONV_WEIGHT_3_OFFSET), CONV_WEIGHT_3_SIZE);
 	transpose_weight((float *)(weights + CONV_WEIGHT_3_OFFSET), 32, 32);
 	load_npy_into<float>("parameters/m.0.cv1.conv.weight", (float *)(weights + CONV_WEIGHT_m0_OFFSET), CONV_WEIGHT_m0_SIZE);
@@ -1223,7 +1227,7 @@ int main(int arg, char ** args){
 		load_input_into("data/outputs/output_cv2_0.txt", t_gt_2, 409600);
 		load_npy_into("parameters/cv2.conv.weight", t_weight_2, 512);
 		load_npy_into("parameters/cv2.conv.bias", t_bias_2, 16);
-		transpose_weight(t_weight_2, 32, 16);
+		transpose_weight(t_weight_2, 16, 32);
 		
 		/* for(int i = 0; i < 819200; i++){
 			t_input_2[i] = static_cast<float>(rand()) \
@@ -1376,7 +1380,7 @@ int main(int arg, char ** args){
 		load_input_into<float>("data/inputs/input_fused_0.txt", t_input_1, 819200);
 
         	load_npy_into<float>("parameters/cv1.conv.weight", t_weight_1, CONV_WEIGHT_1_SIZE);
-        	transpose_weight(t_weight_1, 32, 16);
+        	transpose_weight(t_weight_1, 16, 32);
 		load_npy_into<float>("parameters/m.0.cv1.conv.weight", t_weight_2, CONV_WEIGHT_m0_SIZE);
         	transpose_weight(t_weight_2, 16, 16);
         	load_npy_into<float>("parameters/cv1.conv.bias", t_bias_1, CONV_BIAS_1_SIZE);
