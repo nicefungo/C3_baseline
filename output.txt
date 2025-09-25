@@ -1,0 +1,81 @@
+Integrated C3 test passed?: 0
+Mistake on 817037 elements out of 819200
+C3 runtime: 2.49635 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+// baseline
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.98797 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.98294 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 0
+Mistake on 817114 elements out of 819200
+C3 runtime: 2.51008 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// im2col updated to v2
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.49907 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.37709 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.49862 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// col2im updated to v2
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.3799 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// unpadded im2col
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.51494 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// im2col padded by 2
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.38947 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.36602 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+

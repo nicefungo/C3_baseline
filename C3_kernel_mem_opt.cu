@@ -22,7 +22,7 @@ __global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D){
 
 	// Let a single block transposes one tile (1024 elements)
 	// Requires (800, 1) blocks
-	if(col >= 32 || row >= 25600) return;
+	// if(col >= 32 || row >= 25600) return;
 
 	// One thread moves 1024/BLOCK_DIM^2 elements
 	// Assume a typical (32, 32) blocksize, then it is 1
@@ -33,6 +33,41 @@ __global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D){
 
 	D[(((blockIdx.x << 5) + threadIdx.x) << 5) + threadIdx.y] = tile[threadIdx.y][threadIdx.x];
 
+}
+
+template<typename T>
+__global__ void im2col_32x160x160_25600x32_transpose_v2(const T * img, T * D){
+
+
+        // TILE_DIM = 32
+        __shared__ T tile[32][33]; // tile size is 1 * 800
+
+        // unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
+        // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
+
+        unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int col = threadIdx.y; // 0:32
+
+        // Let a single block transposes one tile (1024 elements)
+        // Requires (800, 1) blocks
+        // if(col >= 32 || row >= 25600) return;
+
+        // One thread moves 1024/BLOCK_DIM^2 elements
+        // Assume a typical (32, 32) blocksize, then it is 1
+
+        tile[threadIdx.y][threadIdx.x] = img[col * 25600 + row];
+
+        __syncthreads();
+
+        D[(((blockIdx.x << 5) + threadIdx.y) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+
+}
+
+
+template<typename T>
+__global__ void im2col_32x160x160_25600x32_transpose_direct(const T * img, T * D){
+	
+	D[(((blockIdx.x << 5) + threadIdx.x) << 5) + threadIdx.y] = img[threadIdx.y * 25600 + blockIdx.x * blockDim.x + threadIdx.x];
 
 }
 
@@ -49,11 +84,33 @@ __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img){
 
 	if(col >= 32 || row >= 25600) return;
 	
-	tile[threadIdx.x][threadIdx.y] = D[(((blockIdx.x << 5) + threadIdx.x) << 5) +threadIdx.y];
+	tile[threadIdx.x][threadIdx.y] = D[(((blockIdx.x << 5) + threadIdx.x) << 5) + threadIdx.y];
 
 	// __syncthreads();
         
 	img[(col * 25600) + row] = tile[threadIdx.x][threadIdx.y];
+
+}
+
+
+template<typename T>
+__global__ void col2im_25600x32_32x160x160_transpose_v2(const T * D , T * img){
+
+        __shared__ T tile[32][33];
+
+        // unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
+        // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
+
+        unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int col = threadIdx.y; // 0:32
+
+        // if(col >= 32 || row >= 25600) return;
+
+        tile[threadIdx.x][threadIdx.y] = D[(((blockIdx.x << 5) + threadIdx.y) << 5) + threadIdx.x];
+
+        __syncthreads();
+
+        img[(col * 25600) + row] = tile[threadIdx.y][threadIdx.x];
 
 }
 
@@ -693,7 +750,7 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 	dim3 blocksize_im2col(32, 32);	
 	dim3 gridsize_im2col(800, 1);	
-	im2col_32x160x160_25600x32_transpose<float>
+	im2col_32x160x160_25600x32_transpose_v2<float>
 					    <<<gridsize_im2col, blocksize_im2col, 0, s1>>>
 					    (img, input);
 
@@ -803,7 +860,7 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 	dim3 blocksize_col2im(32, 32);
         dim3 gridsize_col2im(800, 1);
-	col2im_25600x32_32x160x160_transpose<float>
+	col2im_25600x32_32x160x160_transpose_v2<float>
 					    <<<gridsize_col2im, blocksize_col2im, 0, s6>>>
 					    (D,
 					     out_img);
@@ -1006,6 +1063,9 @@ int main(int arg, char ** args){
 	CHECK_CUDA_ERROR(cudaEventCreate(&C3_start));
 	CHECK_CUDA_ERROR(cudaEventCreate(&C3_stop));
 
+	C3<float>(d_img, d_input, d_weights, d_biases, d_output, d_buffer1, d_buffer2, d_buffer3, d_reshaped_mat, d_reshaped_weight, d_out_img);
+	C3<float>(d_img, d_input, d_weights, d_biases, d_output, d_buffer1, d_buffer2, d_buffer3, d_reshaped_mat, d_reshaped_weight, d_out_img);
+	
 	CHECK_CUDA_ERROR(cudaEventRecord(C3_start, 0));
         
 	C3<float>(d_img, d_input, d_weights, d_biases, d_output, d_buffer1, d_buffer2, d_buffer3, d_reshaped_mat, d_reshaped_weight, d_out_img);
