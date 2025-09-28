@@ -591,6 +591,121 @@ __global__ void Conv_25600x16x32_SiLU(const T * input, const T * weight, \
 }
 
 
+template<typename T>
+__global__ void Conv_25600x16x32_SiLU_v2(const T * input, const T * weight, \
+                const T * bias, T * D)
+{
+
+	// Input is a matrix transposed from img
+	//
+	// Matrix A size: 25600 * 32
+	
+	// GEMM
+	// -----------------------------------------------
+	// Tiling size = M: 16, N: 16, K: 16
+	// TODO: try tiling size M: 16, N: 16, K: 8
+	//                    or M: 32, N: 16, K: 8
+	//                    or M: 32, N: 16, K: 16
+	//                    or M: 64, N: 16, K: 16
+	// Tiling dim: tild_M = 100, tile_N = 2, tile_K = 1
+	
+	unsigned int tile_row = (threadIdx.y << 1) + (threadIdx.x >> 4);
+	unsigned int row = blockDim.x * blockIdx.x + tile_row;
+	unsigned int col = (threadIdx.x & 15U);
+
+	// block tile size 32 * 16
+	// block size 32 * 8
+	// unsigned int block_linear = gridDim.x * blockIdx.y + blockIdx.x;
+	unsigned int thread_linear = blockDim.x * threadIdx.y + threadIdx.x;
+
+	// 8 warps per block
+	// unsigned int warp_id = (thread_linear >> 5);
+	// unsigned int lane_id = thread_linear & 31U;
+	
+	// Do padding on the column to avoid shared mem access
+	// conflict
+
+
+	// Get everything required from matrix in register
+	// Four accesses to global mem : Global -> Shared
+	// 
+
+	// TODO: why padding make it worse? the same for weight
+	__shared__ T tiled_input[32][33];
+	// __shared__ T tiled_input_transposed[32][17]
+	
+	// An offset of thread_linear or (* + 256) on tiled input
+	tiled_input[threadIdx.y][threadIdx.x] = input[(blockIdx.x << 10)
+                                                    + thread_linear];
+        tiled_input[threadIdx.y + 8][threadIdx.x]
+						            = input[(blockIdx.x << 10)
+                                                    + thread_linear + 256U];
+        tiled_input[threadIdx.y + 16][threadIdx.x]
+						            = input[(blockIdx.x << 10)
+                                                    + thread_linear + 512U];
+        tiled_input[threadIdx.y + 24][threadIdx.x]
+						            = input[(blockIdx.x << 10)
+                                                    + thread_linear + 768U];
+
+	/*
+	tiled_input_transposed[threadIdx.y][threadIdx.x] = input[start_pos 
+						    + block_linear * 256
+						    + thread_linear];
+	tiled_input_transposed[threadIdx.y][threadIdx.x + 16] = input[start_pos 
+						    + block_linear * 256
+						    + thread_linear + 256];
+	*/
+	
+	
+	__shared__ T tiled_weight[32][17];
+	// Coalescing access
+	tiled_weight[tile_row][col] = weight[thread_linear];
+	tiled_weight[tile_row + 16U][col] = weight[thread_linear + 256U];
+	
+
+	__syncthreads();
+
+
+
+	// 
+	// First trying a warp tiling of size 4 * 2
+	
+	// No warp tiling for now
+	// unsigned int warp_tile_id_x = warp_id >> 1;
+	// unsigned int warp_tile_id_y = warp_id & 1;
+	
+
+	T weight_val[32];
+
+#pragma unroll
+	for(int i = 0; i < 32; i++){
+		weight_val[i] = tiled_weight[i][col];
+	}
+
+
+
+	T sum0{static_cast<T>(0)};
+	T sum1{static_cast<T>(0)};
+
+#pragma unroll
+	for(int i = 0; i < 32; i++){
+		sum0 += weight_val[i] * tiled_input[tile_row][i];
+		sum1 += weight_val[i] * tiled_input[tile_row + 16U][i];
+	}
+
+	float the_bias = bias[col];
+	sum0 += the_bias;
+	sum0 = silu<T>(sum0);
+	sum1 += the_bias;
+	sum1 = silu<T>(sum1);
+
+	// input_size : output_size = 2:1, so it the offset
+	D[(row << 4)+ col] = sum0;
+	D[(row << 4)+ col + 256U] = sum1;
+
+	return;
+}
+
 
 template<typename T>
 __global__ void Conv_25600x32x32_SiLU(const T * input, const T * weight, \
@@ -704,6 +819,121 @@ __global__ void Conv_25600x32x32_SiLU(const T * input, const T * weight, \
 					      + tile_col_start + 1] = sum11;
 }
 
+
+template<typename T>
+__global__ void Conv_25600x32x32_SiLU_v2(const T * input, const T * weight, \
+                const T * bias, T * D)
+{
+	// Input is a matrix transposed from img
+        //
+        // Matrix size: 25600 * 32
+        //
+        // Multiplying of a single img is divided into 8
+        // asyn processes on separate streams indexed by
+        // offset
+
+	// Typically 32 * 8 blocksize
+	// Each block compute 32 * 32 elements in output
+		
+	// unsigned int start_pos = (offset * 3200U) << 5;
+
+        // unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
+        // unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
+
+        // input A block tile size 32 * 32
+
+	// grid size dim3(100, 1) 
+        // block size dim3(32,  8) PS: dim3(x_dim, y_dim, z_dim)
+        //  unsigned int block_linear = gridDim.x * blockIdx.y + blockIdx.x;
+        unsigned int thread_linear = blockDim.x * threadIdx.y + threadIdx.x;
+
+	// Thread tile 4 * 1
+	// Thread tile dim 16 * 16
+        unsigned int tile_row_start = ((thread_linear >> 5) << 2);
+        unsigned int tile_col_start = (thread_linear & 31U);
+	
+	// 8 warps per block
+        unsigned int warp_id = (thread_linear >> 5);
+        unsigned int lane_id = thread_linear & 31U;
+
+	// To compute a 32 * 32 block tile, it requires 32 * 32 from A
+	// and 32 * 32 elements from B, each thread move 4 elements from
+	// each
+	
+	// TODO: padding?	
+	__shared__ T A_tile[32][32];
+	__shared__ T B_tile[32][32];
+
+	A_tile[warp_id][lane_id] = input[(blockIdx.x << 10)
+						    + thread_linear];
+	A_tile[warp_id + 8][lane_id] = input[(blockIdx.x << 10)
+						        + thread_linear + 256];
+	A_tile[warp_id + 16][lane_id] = input[(blockIdx.x << 10)
+                                                        + thread_linear + 512];
+	A_tile[warp_id + 24][lane_id] = input[+ (blockIdx.x << 10)
+                                                        + thread_linear + 768];
+
+	B_tile[warp_id][lane_id] = weight[thread_linear];
+	B_tile[warp_id + 8][lane_id] = weight[thread_linear + 256];
+	B_tile[warp_id + 16][lane_id] = weight[thread_linear + 512];
+	B_tile[warp_id + 24][lane_id] = weight[thread_linear + 768];
+
+	__syncthreads();
+
+	// T A_val[4][32];
+	T B_val[32];
+
+#pragma unroll
+	for(int i = 0; i < 32; i++){
+		// a bit away from broadcasting (TODO: 2 * 1 thread tiling?)
+		// A_val[0][i] = A_tile[tile_row_start][i];
+		// A_val[1][i] = A_tile[tile_row_start + 1][i];
+		// A_val[2][i] = A_tile[tile_row_start + 2][i];
+		// A_val[3][i] = A_tile[tile_row_start + 3][i];
+
+		// stride = 2
+		B_val[i] = B_tile[i][tile_col_start];
+	}	
+
+	/*T sum[2][2] = {static_cast<T>(0), static_cast<T>(0), 
+		       static_cast<T>(0), static_cast<T>(0)};*/
+
+	T sum0{};
+	T sum1{};
+	T sum2{};
+	T sum3{};
+	
+#pragma unroll
+	for(int i = 0; i < 32; i++){
+		sum0 += A_tile[tile_row_start][i] * B_val[i];
+		sum1 += A_tile[tile_row_start + 1][i] * B_val[i];
+		sum2 += A_tile[tile_row_start + 2][i] * B_val[i];
+		sum3 += A_tile[tile_row_start + 3][i] * B_val[i];
+	}
+
+	float the_bias = bias[tile_col_start];
+	sum0 += the_bias;
+	sum1 += the_bias;
+	sum2 += the_bias;
+	sum3 += the_bias;
+
+	sum0 = silu<T>(sum0);
+	sum1 = silu<T>(sum1);
+	sum2 = silu<T>(sum2);
+	sum3 = silu<T>(sum3);
+
+	// output and input are with the same size
+	D[(blockIdx.x << 10) + (tile_row_start << 5)
+					      + tile_col_start] = sum0;
+
+	D[(blockIdx.x << 10) + ((tile_row_start + 1) << 5)
+					      + tile_col_start] = sum1;
+	D[(blockIdx.x << 10) + ((tile_row_start + 2) << 5)
+					      + tile_col_start] = sum2;
+	D[(blockIdx.x << 10) + ((tile_row_start + 3) << 5)
+					      + tile_col_start] = sum3;
+}
+
 template<typename T>
 __global__ void concat_25600x16_25600x16_25600x32(const T * input1, const T * input2, T * D){
 	// grid(800, 1) block(32, 1) for 16
@@ -789,9 +1019,9 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 	CHECK_LAST_CUDA_ERROR();
 	
-	dim3 blocksize_conv2(16, 16);
-        dim3 gridsize_conv2(1, 1600);
-        Conv_25600x16x32_SiLU<float><<<gridsize_conv2, blocksize_conv2, 0, s4>>>
+	dim3 blocksize_conv2(32, 8);
+        dim3 gridsize_conv2(800, 1);
+        Conv_25600x16x32_SiLU_v2<float><<<gridsize_conv2, blocksize_conv2, 0, s4>>>
                                         ( input,
                                          (float *)(weights + CONV_WEIGHT_2_OFFSET),
                                          (float *)(biases + CONV_BIAS_2_OFFSET),
@@ -849,8 +1079,8 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 
 	dim3 blocksize_conv3(32, 8);
-        dim3 gridsize_conv3(1, 800);
-	Conv_25600x32x32_SiLU<float><<<gridsize_conv3, blocksize_conv3, 0, s6>>>
+        dim3 gridsize_conv3(800, 1);
+	Conv_25600x32x32_SiLU_v2<float><<<gridsize_conv3, blocksize_conv3, 0, s6>>>
 				    (buffer3,
 				     (float*) (weights + CONV_WEIGHT_3_OFFSET),
 				     (float*) (biases + CONV_BIAS_3_OFFSET),

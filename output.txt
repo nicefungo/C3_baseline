@@ -79,3 +79,79 @@ C3 runtime: 2.36602 ms
 Unit tests begin
 -----------------------------------------------
 
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 4.37926 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// Conv 25600x32x32 coalescing access to global
+// but more accesses to shared memory
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.36214 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 3.90374 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.37408 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.85619 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// Conv 25600x32x32 padding shared
+// No improvement though
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.36259 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.37587 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// Conv 25600x16x32 coalescing global access
+// and shared memory padding
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.30502 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.34349 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.34848 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
