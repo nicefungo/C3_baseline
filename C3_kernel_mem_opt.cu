@@ -399,9 +399,9 @@ __global__ void Convm1_input_reshape_25600x16_25600x144(const T * input , T * D)
 
 	// Each thread moves 30 elements from global
 	// Three rows in original input with row padding
-	__shared__ T tile[480][16+1];
+	__shared__ T tile[480][17];
 
-#pragma unroll 10
+#pragma unroll
 	for(int i = 0; i < 30; i++){
 		// global offsets
 		unsigned int linear = input_tile_start_pos + thread_linear + (i << 8);
@@ -435,6 +435,7 @@ __global__ void Convm1_input_reshape_25600x16_25600x144(const T * input , T * D)
 	// T val[3][12];
 	// for(int i = -1, )
 
+#pragma unroll
 	for(int i = 0; i < 90; i++){
 		// global offsets
 		unsigned int linear = output_tile_start_pos + thread_linear + (i << 8);
@@ -631,7 +632,7 @@ __global__ void Conv_25600x16x32_SiLU_v2(const T * input, const T * weight, \
 	// 
 
 	// TODO: why padding make it worse? the same for weight
-	__shared__ T tiled_input[32][33];
+	__shared__ T tiled_input[32][32];
 	// __shared__ T tiled_input_transposed[32][17]
 	
 	// An offset of thread_linear or (* + 256) on tiled input
@@ -657,7 +658,7 @@ __global__ void Conv_25600x16x32_SiLU_v2(const T * input, const T * weight, \
 	*/
 	
 	
-	__shared__ T tiled_weight[32][17];
+	__shared__ T tiled_weight[32][16];
 	// Coalescing access
 	tiled_weight[tile_row][col] = weight[thread_linear];
 	tiled_weight[tile_row + 16U][col] = weight[thread_linear + 256U];

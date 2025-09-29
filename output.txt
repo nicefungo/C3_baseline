@@ -133,7 +133,6 @@ Unit tests begin
 -----------------------------------------------
 
 // Conv 25600x16x32 coalescing global access
-// and shared memory padding
 Integrated C3 test passed?: 1
 Mistake on 0 elements out of 819200
 C3 runtime: 2.30502 ms
@@ -141,6 +140,7 @@ C3 runtime: 2.30502 ms
 Unit tests begin
 -----------------------------------------------
 
+// shared memory padding makes it worse
 Integrated C3 test passed?: 1
 Mistake on 0 elements out of 819200
 C3 runtime: 2.34349 ms
@@ -151,6 +151,73 @@ Unit tests begin
 Integrated C3 test passed?: 1
 Mistake on 0 elements out of 819200
 C3 runtime: 2.34848 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 0
+Mistake on 819075 elements out of 819200
+C3 runtime: 4.32522 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 0
+Mistake on 819075 elements out of 819200
+C3 runtime: 2.34243 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.35114 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.34989 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+
+// Seems varying the blockid among x instead
+// of y doesn't help
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.34019 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// back to unpadded shared memory in 
+// Conv 25600x16x32
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.29894 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// Completely unroll loop of size 90
+// in input reshaping(resizing)
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.2745 ms
+-----------------------------------------------
+Unit tests begin
+-----------------------------------------------
+
+// Completely unroll loop of size 30
+// in input reshaping(resizing)
+// This time no improvement
+Integrated C3 test passed?: 1
+Mistake on 0 elements out of 819200
+C3 runtime: 2.27504 ms
 -----------------------------------------------
 Unit tests begin
 -----------------------------------------------
