@@ -7,17 +7,17 @@ void TODO(){
 }
 
 
-template<typename T>
+template<typename T, unsigned int TILING_MULTIPLY>
 __global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D){
 
 
         // TILE_DIM = 32
-        __shared__ T tile[32][33]; // tile size is 1 * 800
+        __shared__ T tile[32][(32 * TILING_MULTIPLY) + 1]; // tile size is 1 * 800
 
         // unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
         // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
 
-        unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int row = (blockIdx.x << log2_unsigned(TILING_MULTIPLY)) * blockDim.x + threadIdx.x; // 0:25600
         unsigned int col = threadIdx.y; // 0:32
 
         // Let a single block transposes one tile (1024 elements)
@@ -27,11 +27,116 @@ __global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D){
         // One thread moves 1024/BLOCK_DIM^2 elements
         // Assume a typical (32, 32) blocksize, then it is 1
 
-        tile[threadIdx.y][threadIdx.x] = img[col * 25600 + row];
+#pragma unroll 
+	for(int i = 0; i < TILING_MULTIPLY; i++){
+        	tile[threadIdx.y][threadIdx.x + (i << 5)] = img[col * 25600 + row + (i << 5)];
+	}
 
         __syncthreads();
 
-        D[(((blockIdx.x << 5) + threadIdx.y) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+#pragma unroll
+	for(int i = 0; i < TILING_MULTIPLY; i++){
+        	D[(((blockIdx.x << (5 + log2_unsigned(TILING_MULTIPLY))) + threadIdx.y + (i << 5)) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + (i << 5)];
+	}
+}
+
+
+template<typename T>
+__global__ void im2col_32x160x160_25600x32_transpose_tiling_32x64(const T * img, T * D){
+
+
+        __shared__ T tile[32][65]; // tile size is 1 * 400
+
+        // unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
+        // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
+
+        unsigned int row = (blockIdx.x << 1) * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int col = threadIdx.y; // 0:32
+
+        // Let a single block transposes one tile (2048 elements)
+        // Requires (400, 1) blocks
+
+        tile[threadIdx.y][threadIdx.x] = img[col * 25600 + row];
+        tile[threadIdx.y][threadIdx.x + 32] = img[col * 25600 + row + 32];
+
+
+        __syncthreads();
+
+        D[(((blockIdx.x << 6) + threadIdx.y) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+        D[(((blockIdx.x << 6) + threadIdx.y + 32) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 32];
+
+}
+
+template<typename T>
+__global__ void im2col_32x160x160_25600x32_transpose_tiling_32x128(const T * img, T * D){
+
+
+        __shared__ T tile[32][129]; // tile size is 1 * 200
+
+        // unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
+        // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
+
+        unsigned int row = (blockIdx.x << 2) * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int col = threadIdx.y; // 0:32
+
+        // Let a single block transposes one tile (4096 elements)
+        // Requires (200, 1) blocks
+
+
+        tile[threadIdx.y][threadIdx.x] = img[col * 25600 + row];
+        tile[threadIdx.y][threadIdx.x + 32] = img[col * 25600 + row + 32];
+        tile[threadIdx.y][threadIdx.x + 64] = img[col * 25600 + row + 64];
+        tile[threadIdx.y][threadIdx.x + 96] = img[col * 25600 + row + 96];
+
+
+        __syncthreads();
+
+        D[(((blockIdx.x << 7) + threadIdx.y) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+        D[(((blockIdx.x << 7) + threadIdx.y + 32) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 32];
+        D[(((blockIdx.x << 7) + threadIdx.y + 64) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 64];
+        D[(((blockIdx.x << 7) + threadIdx.y + 96) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 96];
+
+}
+
+template<typename T>
+__global__ void im2col_32x160x160_25600x32_transpose_tiling_32x256(const T * img, T * D){
+
+
+        __shared__ T tile[32][257]; // tile size is 1 * 200
+
+        // unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
+        // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
+
+        unsigned int row = (blockIdx.x << 3) * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int col = threadIdx.y; // 0:32
+
+        // Let a single block transposes one tile (8192 elements)
+        // Requires (100, 1) blocks
+
+        // One thread moves 4096/BLOCK_DIM^2 elements
+        // Assume a typical (32, 32) blocksize, then it is 8
+
+        tile[threadIdx.y][threadIdx.x] = img[col * 25600 + row];
+        tile[threadIdx.y][threadIdx.x + 32] = img[col * 25600 + row + 32];
+        tile[threadIdx.y][threadIdx.x + 64] = img[col * 25600 + row + 64];
+        tile[threadIdx.y][threadIdx.x + 96] = img[col * 25600 + row + 96];
+        tile[threadIdx.y][threadIdx.x + 128] = img[col * 25600 + row + 128];
+        tile[threadIdx.y][threadIdx.x + 160] = img[col * 25600 + row + 160];
+        tile[threadIdx.y][threadIdx.x + 192] = img[col * 25600 + row + 192];
+        tile[threadIdx.y][threadIdx.x + 224] = img[col * 25600 + row + 224];
+
+
+        __syncthreads();
+
+        D[(((blockIdx.x << 8) + threadIdx.y) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y];
+        D[(((blockIdx.x << 8) + threadIdx.y + 32) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 32];
+        D[(((blockIdx.x << 8) + threadIdx.y + 64) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 64];
+        D[(((blockIdx.x << 8) + threadIdx.y + 96) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 96];
+        D[(((blockIdx.x << 8) + threadIdx.y + 128) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 128];
+        D[(((blockIdx.x << 8) + threadIdx.y + 160) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 160];
+        D[(((blockIdx.x << 8) + threadIdx.y + 192) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 192];
+        D[(((blockIdx.x << 8) + threadIdx.y + 224) << 5) + threadIdx.x] = tile[threadIdx.x][threadIdx.y + 224];
+
 
 }
 
@@ -44,47 +149,47 @@ __global__ void im2col_32x160x160_25600x32_transpose_direct(const T * img, T * D
 }
 
 
-
-
-template<typename T>
+template<typename T, unsigned int TILING_MULTIPLY>
 __global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img){
 
-        __shared__ T tile[32][33];
+        __shared__ T tile[32 * TILING_MULTIPLY][33];
 
-        // unsigned int thread_linear = threadIdx.y * blockDim.x + threadIdx.x; // 0:1024
-        // unsigned int block_linear = blockIdx.y * gridDim.x + blockIdx.x; // 0:800
 
-        unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+        unsigned int row = blockIdx.x * TILING_MULTIPLY * blockDim.x + threadIdx.x; // 0:25600
         unsigned int col = threadIdx.y; // 0:32
 
-        // if(col >= 32 || row >= 25600) return;
 
-        tile[threadIdx.x][threadIdx.y] = D[(((blockIdx.x << 5) + threadIdx.y) << 5) + threadIdx.x];
-
+#pragma unroll
+	for(int i = 0; i < TILING_MULTIPLY; i++){
+        	tile[threadIdx.x + (i << 5)][threadIdx.y] = D[(((blockIdx.x << 5) * TILING_MULTIPLY + threadIdx.y + (i << 5)) << 5) + threadIdx.x];
+	}
         __syncthreads();
 
-        img[(col * 25600) + row] = tile[threadIdx.y][threadIdx.x];
-
+#pragma unroll
+	for(int i = 0; i < TILING_MULTIPLY; i++){
+        	img[(col * 25600) + row + (i << 5)] = tile[threadIdx.y + (i << 5)][threadIdx.x];
+	}
 }
 
-
+// BUG NOT YET FIXED
 // FIXED FOR BASELINE
-template<typename T>
+template<typename T, unsigned int TILING_MULTIPLY>
 __global__ void col2im_25600x16_16x160x160_transpose(const T * D , T * img){
-	// (800 1), (32 16)
-	__shared__ T tile[32][17];
+	__shared__ T tile[32 * TILING_MULTIPLY][17];
 
-	unsigned int row = blockIdx.x * blockDim.x + threadIdx.x; // 0:25600
+	unsigned int row = blockIdx.x * TILING_MULTIPLY * blockDim.x + threadIdx.x; // 0:25600
         unsigned int col = threadIdx.y; // 0:16
 
-        if(col >= 16 || row >= 25600) return;
-
-        tile[threadIdx.x][threadIdx.y] = D[(((blockIdx.x << 5) + threadIdx.x) << 4) +threadIdx.y];
-
+#pragma unroll
+	for(int i = 0; i < TILING_MULTIPLY; i++){
+        	tile[threadIdx.x + (i << 5)][threadIdx.y] = D[(((blockIdx.x << 5) * TILING_MULTIPLY + threadIdx.x + (i << 5)) << 4) + threadIdx.y];
+	}
         // __syncthreads();
 
-        img[(col * 25600) + row] = tile[threadIdx.x][threadIdx.y];
-
+#pragma unroll
+	for(int i = 0; i < TILING_MULTIPLY; i++){
+        	img[(col * 25600) + row + (i << 5)] = tile[threadIdx.x + (i << 5)][threadIdx.y];
+	}
 }
 
 
@@ -712,9 +817,10 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 	cudaEventCreateWithFlags(&e5, cudaEventDisableTiming);
 	cudaEventCreateWithFlags(&e6, cudaEventDisableTiming);
 
+	const int tiling_multiply = 8;
 	dim3 blocksize_im2col(32, 32);	
-	dim3 gridsize_im2col(800, 1);	
-	im2col_32x160x160_25600x32_transpose<float>
+	dim3 gridsize_im2col((800 >> log2_unsigned(tiling_multiply)), 1);	
+	im2col_32x160x160_25600x32_transpose<float, tiling_multiply>
 					    <<<gridsize_im2col, blocksize_im2col, 0, s1>>>
 					    (img, input);
 
@@ -822,9 +928,10 @@ void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T 
 
 	CHECK_LAST_CUDA_ERROR();
 
+
 	dim3 blocksize_col2im(32, 32);
-        dim3 gridsize_col2im(800, 1);
-	col2im_25600x32_32x160x160_transpose<float>
+        dim3 gridsize_col2im((800 >> (log2_unsigned(tiling_multiply))), 1);
+	col2im_25600x32_32x160x160_transpose<float, tiling_multiply>
 					    <<<gridsize_col2im, blocksize_col2im, 0, s6>>>
 					    (D,
 					     out_img);
@@ -1289,7 +1396,7 @@ int main(int arg, char ** args){
 		dim3 gsz(800, 1);
 		dim3 bsz(32, 32);
 		dim3 bsz2(32, 16);
-		im2col_32x160x160_25600x32_transpose<float>
+		im2col_32x160x160_25600x32_transpose<float, 1>
                                             <<<gsz, bsz>>>
                                             (d_t_img, d_t_input_2);
 		
@@ -1330,7 +1437,7 @@ int main(int arg, char ** args){
 		
 
 		CHECK_LAST_CUDA_ERROR();
-                col2im_25600x16_16x160x160_transpose<float>
+                col2im_25600x16_16x160x160_transpose<float, 1>
                                             <<<gsz, bsz2>>>
                                             (d_t_output_2, d_t_img_out);
 
@@ -1458,7 +1565,7 @@ int main(int arg, char ** args){
 
 		dim3 gsz(800, 1);
 		dim3 bsz(32, 32);
-		im2col_32x160x160_25600x32_transpose<float>
+		im2col_32x160x160_25600x32_transpose<float, 1>
                                             <<<gsz, bsz>>>
                                             (d_t_img, d_t_input_1);
 

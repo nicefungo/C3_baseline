@@ -76,3 +76,16 @@ void load_input_into(const std::string& path, T * dst, size_t expected_count){
 	for(; i < expected_count && in >> dst[i]; ++i){}
 
 }
+
+__host__ __device__
+unsigned int log2_unsigned(unsigned int n) {
+    unsigned int log = 0;
+
+    if (n == 0) return 0;
+
+    while (n >>= 1) {
+        log++;
+    }
+
+    return log;
+}
