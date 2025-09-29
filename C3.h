@@ -103,10 +103,10 @@ template<typename T>
 void C3(const T * img, T * input, const T * weights, const T * biases, T * D, T * buffer1, T * buffer2, T * buffer3, T * reshaped_mat, T * reshaped_weight, T * out_img);
 
 template<typename T>
-__global__ void im2col_32x160x160_25600x32_transpose_v2(const T * img, T * D);
+__global__ void im2col_32x160x160_25600x32_transpose(const T * img, T * D);
 
 template<typename T>
-__global__ void col2im_25600x32_32x160x160_transpose_v2(const T * D , T * img);
+__global__ void col2im_25600x32_32x160x160_transpose(const T * D , T * img);
 
 template<typename T>
 __global__ void col2im_25600x16_16x160x160_transpose(const T * D , T * img);
